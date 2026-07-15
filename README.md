@@ -61,8 +61,8 @@ npm run build
 | `MIMO_BASE_URL`         | 否   | API 基础 URL                                              | `https://api.xiaomimimo.com/v1`    |
 | `MIMO_MODEL`            | 否   | 模型名称                                                  | `mimo-v2.5-pro`                    |
 | `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒）                                      | `60000`                            |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                         | `5120`                             |
-| `TEMPERATURE`           | 否   | 采样温度（0-2）                                           | `0.4`                              |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                         | `1024`                             |
+| `TEMPERATURE`           | 否   | 采样温度（0-2）                                           | `0.3`                              |
 | `TOP_P`                 | 否   | 核采样概率（0-1）                                         | `0.95`                             |
 | `MIMO_STREAM`           | 否   | 启用流式响应                                              | `false`                            |
 | `MIMO_THINKING`         | 否   | 启用思考模式                                              | `false`                            |

@@ -94,8 +94,8 @@ describe("loadConfig", () => {
     expect(config.baseUrl).toBe("https://api.xiaomimimo.com/v1");
     expect(config.model).toBe("mimo-v2.5-pro");
     expect(config.requestTimeout).toBe(60000);
-    expect(config.maxCompletionTokens).toBe(5120);
-    expect(config.temperature).toBe(0.4);
+    expect(config.maxCompletionTokens).toBe(1024);
+    expect(config.temperature).toBe(0.3);
     expect(config.topP).toBe(0.95);
     expect(config.stream).toBe(false);
     expect(config.thinking).toBe(false);
@@ -216,7 +216,7 @@ describe("loadConfig", () => {
     process.env.MIMO_API_KEY = "test-key";
     process.env.TEMPERATURE = "xyz";
     const config = await loadConfig();
-    expect(config.temperature).toBe(0.4);
+    expect(config.temperature).toBe(0.3);
   });
 
   // ── 布尔值解析 ───────────────────────────────────
