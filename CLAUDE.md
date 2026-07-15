@@ -6,40 +6,95 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 这是一个 MCP (Model Context Protocol) 服务器，将小米 MiMo 的 web_search API 包装为 Claude Code 可用的搜索工具。
 
+## 技术栈
+
+- **运行时**: Node.js (v20+)
+- **语言**: TypeScript (strict: true)
+- **MCP SDK**: `@modelcontextprotocol/sdk` v1.x
+- **参数校验**: `zod`
+- **开发执行**: `tsx` (热重载)
+- **编译发布**: `tsc` → `dist/`
+
 ## 常用命令
 
 ```bash
 # 安装依赖
 npm install
 
+# 开发模式（热重载）
+npm run dev
+
+# 编译 TypeScript
+npm run build
+
 # 启动服务器（需要设置 MIMO_API_KEY 环境变量）
 npm start
-# 或直接运行
-node server.mjs
+
+# 类型检查
+npm run typecheck
+
+# 代码检查
+npm run lint
+
+# 格式化代码
+npm run format
+
+# 运行所有测试（提交前必跑）
+npm test
+
+# 快速测试（仅代码质量检查）
+npm run test:quick
+
+# 运行特定测试
+npm run test:config   # 配置模块测试
+npm run test:logger   # 日志模块测试
+npm run test:mcp      # MCP 客户端测试（需要 MIMO_API_KEY）
+
+# 提交前完整检查
+npm run precommit
 ```
 
 ## 环境变量
 
-| 变量                    | 必需 | 说明                                               |
-| ----------------------- | ---- | -------------------------------------------------- |
-| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      |
-| `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
-| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                 |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                     |
-| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                        |
-| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                     |
-| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=信息，2=调试           |
+| 变量                    | 必需 | 说明                                                      |
+| ----------------------- | ---- | --------------------------------------------------------- |
+| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                             |
+| `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1`        |
+| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                        |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                            |
+| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                               |
+| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                            |
+| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=警告，2=信息，3=调试          |
 
 ## 架构说明
 
-### 核心文件
+### 目录结构
 
-- `server.mjs` — MCP 服务器主文件，使用 ESM 模块格式
+```
+mimo-web-search-mcp/
+├── src/
+│   ├── index.ts      # MCP 服务器主入口
+│   ├── config.ts     # 配置管理（环境变量加载与验证）
+│   ├── logger.ts     # 日志工具
+│   └── types.ts      # TypeScript 类型定义
+├── tests/
+│   ├── run-all.mjs           # 统一测试入口
+│   ├── test-utils.mjs        # 测试工具函数
+│   ├── test-code-quality.mjs # 代码质量测试
+│   ├── test-config.mjs       # 配置模块测试
+│   ├── test-logger.mjs       # 日志模块测试
+│   └── test-mcp-client.mjs   # MCP 客户端测试
+├── dist/                     # 编译输出
+├── package.json
+├── tsconfig.json
+└── eslint.config.js
+```
 
-### 技术栈
+### 技术特点
 
-- **运行时**: Node.js (ESM 模块)
-- **MCP SDK**: `@modelcontextprotocol/sdk` v1.x
+- **类型安全**: 严格 TypeScript 模式，完整的类型定义
+- **模块化**: 配置、日志、类型分离
+- **MCP 工具**: 注册 `mimo_web_search` 工具，支持 Zod schema 验证
 - **传输协议**: stdio (标准输入/输出)
 
 ### MCP 工具
