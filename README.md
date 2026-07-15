@@ -39,6 +39,39 @@ npm install mimo-web-search-mcp
 
 编辑 `~/.claude.json` 文件（Windows 用户路径为 `%USERPROFILE%\.claude.json`）：
 
+#### 方式一：本地开发配置（推荐）
+
+适用于克隆仓库后本地开发使用：
+
+```json
+{
+  "mcpServers": {
+    "mimo-web-search": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["<项目路径>/dist/index.js"],
+      "env": {
+        "MIMO_API_KEY": "your-api-key-here",
+        "MIMO_BASE_URL": "https://api.xiaomimimo.com/v1"
+      }
+    }
+  }
+}
+```
+
+将 `<项目路径>` 替换为实际路径，例如：
+- Windows: `D:/CodeLocal/mimo-web-search-mcp/dist/index.js`
+- macOS/Linux: `/home/user/mimo-web-search-mcp/dist/index.js`
+
+#### 方式二：全局安装配置
+
+适用于通过 npm 全局安装后使用：
+
+```bash
+# 先全局安装
+npm install -g mimo-web-search-mcp
+```
+
 ```json
 {
   "mcpServers": {
