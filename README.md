@@ -1,6 +1,5 @@
 # MiMo Web Search MCP Server
 
-[![npm version](https://img.shields.io/npm/v/mimo-web-search-mcp)](https://www.npmjs.com/package/mimo-web-search-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 一个基于 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 的服务器，将小米 MiMo 的 `web_search` API 封装为标准 MCP 工具，让 Claude Code 等 AI 助手能够进行实时网络搜索。
@@ -19,29 +18,20 @@
 - Node.js >= 20.0.0
 - MiMo API Key（从 [MiMo 平台](https://mimo.xiaomi.com) 获取）
 
-## 安装
-
-### 全局安装（推荐）
+## 获取源码
 
 ```bash
-npm install -g mimo-web-search-mcp
-```
-
-### 本地安装
-
-```bash
-npm install mimo-web-search-mcp
+git clone https://github.com/your-username/mimo-web-search-mcp.git
+cd mimo-web-search-mcp
+npm install
+npm run build
 ```
 
 ## 配置
 
-### Claude Code 全局配置
+### Claude Code 配置
 
 编辑 `~/.claude.json` 文件（Windows 用户路径为 `%USERPROFILE%\.claude.json`）：
-
-#### 方式一：本地开发配置（推荐）
-
-适用于克隆仓库后本地开发使用：
 
 ```json
 {
@@ -62,28 +52,6 @@ npm install mimo-web-search-mcp
 将 `<项目路径>` 替换为实际路径，例如：
 - Windows: `D:/CodeLocal/mimo-web-search-mcp/dist/index.js`
 - macOS/Linux: `/home/user/mimo-web-search-mcp/dist/index.js`
-
-#### 方式二：全局安装配置
-
-适用于通过 npm 全局安装后使用：
-
-```bash
-# 先全局安装
-npm install -g mimo-web-search-mcp
-```
-
-```json
-{
-  "mcpServers": {
-    "mimo-web-search": {
-      "command": "mimo-web-search",
-      "env": {
-        "MIMO_API_KEY": "your-api-key-here"
-      }
-    }
-  }
-}
-```
 
 ### 环境变量
 
