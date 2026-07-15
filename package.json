@@ -15,7 +15,13 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node tests/run-all.mjs",
+    "test:quick": "node tests/test-code-quality.mjs",
+    "test:config": "node tests/test-config.mjs",
+    "test:logger": "node tests/test-logger.mjs",
+    "test:mcp": "node tests/test-mcp-client.mjs",
+    "precommit": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

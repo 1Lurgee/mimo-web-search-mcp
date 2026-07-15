@@ -53,7 +53,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# Test files
-test-*.mjs
-verify.mjs
+# Test files (only root level)
+/test-*.mjs
+/verify.mjs
 *.tsbuildinfo

@@ -38,6 +38,20 @@ npm run lint
 
 # 格式化代码
 npm run format
+
+# 运行所有测试（提交前必跑）
+npm test
+
+# 快速测试（仅代码质量检查）
+npm run test:quick
+
+# 运行特定测试
+npm run test:config   # 配置模块测试
+npm run test:logger   # 日志模块测试
+npm run test:mcp      # MCP 客户端测试（需要 MIMO_API_KEY）
+
+# 提交前完整检查
+npm run precommit
 ```
 
 ## 环境变量
@@ -57,11 +71,23 @@ npm run format
 ### 目录结构
 
 ```
-src/
-├── index.ts      # MCP 服务器主入口
-├── config.ts     # 配置管理（环境变量加载与验证）
-├── logger.ts     # 日志工具
-└── types.ts      # TypeScript 类型定义
+mimo-web-search-mcp/
+├── src/
+│   ├── index.ts      # MCP 服务器主入口
+│   ├── config.ts     # 配置管理（环境变量加载与验证）
+│   ├── logger.ts     # 日志工具
+│   └── types.ts      # TypeScript 类型定义
+├── tests/
+│   ├── run-all.mjs           # 统一测试入口
+│   ├── test-utils.mjs        # 测试工具函数
+│   ├── test-code-quality.mjs # 代码质量测试
+│   ├── test-config.mjs       # 配置模块测试
+│   ├── test-logger.mjs       # 日志模块测试
+│   └── test-mcp-client.mjs   # MCP 客户端测试
+├── dist/                     # 编译输出
+├── package.json
+├── tsconfig.json
+└── eslint.config.js
 ```
 
 ### 技术特点
