@@ -33,8 +33,8 @@ if (!validateUrl(MIMO_BASE_URL)) {
   process.exit(1);
 }
 
-// 请求超时配置（毫秒）
-const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT) || 30000;
+// 请求超时配置（毫秒）- 兼容大部分 MCP Client 的 60 秒限制
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT) || 60000;
 
 // 重试配置
 const MAX_RETRIES = 2;
@@ -145,16 +145,18 @@ server.tool(
       model: "mimo-v2.5-pro",
       messages: [{ role: "user", content: query }],
       tools: [webSearchTool],
-      max_completion_tokens: 1024,
+      max_completion_tokens: 2048, // 搜索总结不需要长篇大论
       temperature: 0.2,
       top_p: 0.95,
-      stream: false,
+      stream: false, // MCP 工具调用是阻塞式的，流式无实际意义
       thinking: { type: "disabled" },
     };
 
     // 重试逻辑
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
+        console.error(`[mimo-web-search] Sending request (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${query.substring(0, 50)}...`);
+
         // 创建超时控制器
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
@@ -170,6 +172,7 @@ server.tool(
         });
 
         clearTimeout(timeoutId);
+        console.error(`[mimo-web-search] Response status: ${resp.status}`);
 
         if (!resp.ok) {
           const errText = await resp.text().catch(() => "");
@@ -205,6 +208,8 @@ server.tool(
           }
         }
 
+        // 解析 JSON 响应
+        console.error(`[mimo-web-search] Parsing response...`);
         const data = await resp.json();
 
         // 验证响应结构
@@ -226,6 +231,8 @@ server.tool(
         const content = message.content || "(no content)";
         const annotations = message.annotations || [];
         const usage = data.usage || {};
+
+        console.error(`[mimo-web-search] Response parsed. Content length: ${content.length}`);
 
         // 应用内容清洗和截断
         const sanitizedContent = sanitizeContent(content);
@@ -252,17 +259,14 @@ server.tool(
       } catch (err) {
         // 处理超时和网络错误
         if (err.name === "AbortError") {
-          if (attempt < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (attempt + 1)));
-            continue;
-          }
+          // 对于流式响应，超时通常意味着 API 本身响应慢，重试可能不会有帮助
           return {
             content: [{ type: "text", text: "Request timed out. The MiMo service may be slow or unavailable. Please try again later." }],
             isError: true,
           };
         }
 
-        // 网络错误重试
+        // 网络错误重试（仅对可恢复的网络错误重试）
         if (attempt < MAX_RETRIES && (err.code === "ECONNRESET" || err.code === "ENOTFOUND" || err.code === "ECONNREFUSED")) {
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (attempt + 1)));
           continue;
