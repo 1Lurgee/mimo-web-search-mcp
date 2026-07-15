@@ -29,6 +29,8 @@ npm install
 
 ### Claude Code 配置
 
+#### 1. MCP 服务器配置
+
 在 Claude Code 的 MCP 配置文件中添加：
 
 ```json
@@ -44,6 +46,20 @@ npm install
   }
 }
 ```
+
+#### 2. 全局指令配置（推荐）
+
+在全局 CLAUDE.md 中添加，让 Claude Code 在所有项目中都知道这个 MCP 工具：
+
+**文件位置**：`~/.claude/CLAUDE.md`
+
+```markdown
+# 全局指令
+
+## 网络搜索工具
+当需要搜索网络信息时，优先使用 `mimo_web_search` MCP 工具。
+```
+
 
 ## 使用方法
 
