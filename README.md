@@ -21,11 +21,15 @@ npm install
 
 ### 环境变量
 
-| 变量 | 必需 | 说明 |
-|------|------|------|
-| `MIMO_API_KEY` | 是 | MiMo API 密钥 |
-| `MIMO_BASE_URL` | 否 | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
-| `REQUEST_TIMEOUT` | 否 | 请求超时时间（毫秒），默认 `30000` |
+| 变量                    | 必需 | 说明                                               |
+| ----------------------- | ---- | -------------------------------------------------- |
+| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      |
+| `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
+| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                 |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                     |
+| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                        |
+| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                     |
+| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=信息，2=调试           |
 
 ### Claude Code 配置
 
@@ -57,9 +61,9 @@ npm install
 # 全局指令
 
 ## 网络搜索工具
+
 当需要搜索网络信息时，优先使用 `mimo_web_search` MCP 工具。
 ```
-
 
 ## 使用方法
 
@@ -69,15 +73,15 @@ npm install
 
 #### 参数
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `query` | string | 必需 | 搜索查询 |
-| `max_keyword` | int (1-50) | 3 | 每轮最大并发关键词数 |
-| `limit` | int (1-50) | 5 | 返回结果数量 |
-| `force_search` | boolean | false | 强制搜索 |
-| `country` | string | 可选 | 国家 |
-| `region` | string | 可选 | 地区 |
-| `city` | string | 可选 | 城市 |
+| 参数           | 类型       | 默认值 | 说明                 |
+| -------------- | ---------- | ------ | -------------------- |
+| `query`        | string     | 必需   | 搜索查询             |
+| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数 |
+| `limit`        | int (1-50) | 5      | 返回结果数量         |
+| `force_search` | boolean    | true   | 强制搜索             |
+| `country`      | string     | 可选   | 国家                 |
+| `region`       | string     | 可选   | 地区                 |
+| `city`         | string     | 可选   | 城市                 |
 
 #### 示例
 
@@ -93,6 +97,7 @@ npm install
 ### 返回格式
 
 成功响应：
+
 ```
 搜索结果内容...
 
@@ -105,9 +110,14 @@ Tokens: 1500 (prompt: 500, completion: 1000)
 ```
 
 错误响应：
+
 ```
 错误描述和恢复建议
 ```
+
+## 安全说明
+
+本 MCP 服务器仅作为 MiMo 搜索 API 的透传层，不对返回内容做提示词注入过滤。防御提示词注入是 Client 端（Claude Code 等）的职责，建议在使用搜索结果时保持警惕。
 
 ## 错误处理
 

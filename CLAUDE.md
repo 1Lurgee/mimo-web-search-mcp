@@ -20,11 +20,15 @@ node server.mjs
 
 ## 环境变量
 
-| 变量 | 必需 | 说明 |
-|------|------|------|
-| `MIMO_API_KEY` | 是 | MiMo API 密钥 |
-| `MIMO_BASE_URL` | 否 | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
-| `REQUEST_TIMEOUT` | 否 | 请求超时时间（毫秒），默认 `30000` |
+| 变量                    | 必需 | 说明                                               |
+| ----------------------- | ---- | -------------------------------------------------- |
+| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      |
+| `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
+| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                 |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                     |
+| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                        |
+| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                     |
+| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=信息，2=调试           |
 
 ## 架构说明
 
@@ -42,15 +46,15 @@ node server.mjs
 
 服务器注册了一个工具 `mimo_web_search`，参数：
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `query` | string | 必需 | 搜索查询 |
-| `max_keyword` | int (1-50) | 3 | 每轮最大并发关键词数 |
-| `limit` | int (1-50) | 5 | 返回结果数量 |
-| `force_search` | boolean | false | 强制搜索 |
-| `country` | string | 可选 | 国家 |
-| `region` | string | 可选 | 地区 |
-| `city` | string | 可选 | 城市 |
+| 参数           | 类型       | 默认值 | 说明                 |
+| -------------- | ---------- | ------ | -------------------- |
+| `query`        | string     | 必需   | 搜索查询             |
+| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数 |
+| `limit`        | int (1-50) | 5      | 返回结果数量         |
+| `force_search` | boolean    | true   | 强制搜索             |
+| `country`      | string     | 可选   | 国家                 |
+| `region`       | string     | 可选   | 地区                 |
+| `city`         | string     | 可选   | 城市                 |
 
 ### 调用流程
 
