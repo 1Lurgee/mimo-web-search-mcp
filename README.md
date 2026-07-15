@@ -54,15 +54,15 @@ npm install mimo-web-search-mcp
 
 ### 环境变量
 
-| 变量                    | 必需 | 说明                                               | 默认值                              |
-| ----------------------- | ---- | -------------------------------------------------- | ----------------------------------- |
-| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      | -                                   |
-| `MIMO_BASE_URL`         | 否   | API 基础 URL                                       | `https://api.xiaomimimo.com/v1`    |
-| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒）                               | `60000`                            |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                  | `2048`                             |
-| `TEMPERATURE`           | 否   | 采样温度（0-2）                                    | `0.2`                              |
-| `TOP_P`                 | 否   | 核采样概率（0-1）                                  | `0.95`                             |
-| `DEBUG`                 | 否   | 日志级别：0=错误，1=信息，2=调试                   | `0`                                |
+| 变量                    | 必需 | 说明                                                      | 默认值                              |
+| ----------------------- | ---- | --------------------------------------------------------- | ----------------------------------- |
+| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                             | -                                   |
+| `MIMO_BASE_URL`         | 否   | API 基础 URL                                              | `https://api.xiaomimimo.com/v1`    |
+| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒）                                      | `60000`                            |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                         | `2048`                             |
+| `TEMPERATURE`           | 否   | 采样温度（0-2）                                           | `0.2`                              |
+| `TOP_P`                 | 否   | 核采样概率（0-1）                                         | `0.95`                             |
+| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=警告，2=信息，3=调试          | `0`                                |
 
 ## 开发
 
@@ -94,6 +94,24 @@ npm run typecheck
 
 ```bash
 npm run lint
+```
+
+### 测试
+
+```bash
+# 运行所有测试（提交前必跑）
+npm test
+
+# 快速测试（仅代码质量检查）
+npm run test:quick
+
+# 运行特定测试
+npm run test:config   # 配置模块测试
+npm run test:logger   # 日志模块测试
+npm run test:mcp      # MCP 客户端测试（需要 MIMO_API_KEY）
+
+# 提交前完整检查（类型检查 + ESLint + 测试）
+npm run precommit
 ```
 
 ## 使用方法
@@ -144,6 +162,13 @@ mimo-web-search-mcp/
 │   ├── config.ts     # 配置管理
 │   ├── logger.ts     # 日志工具
 │   └── types.ts      # 类型定义
+├── tests/
+│   ├── run-all.mjs           # 统一测试入口
+│   ├── test-utils.mjs        # 测试工具函数
+│   ├── test-code-quality.mjs # 代码质量测试
+│   ├── test-config.mjs       # 配置模块测试
+│   ├── test-logger.mjs       # 日志模块测试
+│   └── test-mcp-client.mjs   # MCP 客户端测试
 ├── dist/             # 编译输出（自动忽略）
 ├── package.json
 ├── tsconfig.json
