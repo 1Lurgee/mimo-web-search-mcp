@@ -1,0 +1,14 @@
+{
+  "name": "mimo-web-search-mcp",
+  "version": "1.0.0",
+  "description": "MCP Server wrapping Xiaomi MiMo web_search API for Claude Code",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  }
+}
