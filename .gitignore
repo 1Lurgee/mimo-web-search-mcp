@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Build output
+dist/
+
 # Environment variables
 .env
 .env.local
@@ -53,3 +56,4 @@ Thumbs.db
 # Test files
 test-*.mjs
 verify.mjs
+*.tsbuildinfo

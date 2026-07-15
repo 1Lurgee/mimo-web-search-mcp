@@ -1,48 +1,49 @@
 # MiMo Web Search MCP Server
 
-一个将小米 MiMo 的 web_search API 包装为 Claude Code 可用的 MCP 工具的服务器。
+[![npm version](https://img.shields.io/npm/v/mimo-web-search-mcp)](https://www.npmjs.com/package/mimo-web-search-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+一个基于 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 的服务器，将小米 MiMo 的 `web_search` API 封装为标准 MCP 工具，让 Claude Code 等 AI 助手能够进行实时网络搜索。
 
 ## 功能特性
 
-- 🔍 实时网络搜索：使用小米 MiMo 的 web_search 插件进行实时搜索
-- 📍 位置感知搜索：支持按国家、地区、城市进行本地化搜索
-- 🔄 自动重试：网络错误或服务暂时不可用时自动重试
-- ⏱️ 超时控制：防止请求无限期挂起
-- 🛡️ 错误处理：友好的错误提示和恢复建议
-- 🧹 优雅关闭：正确处理进程信号和异常
+- 🔍 **实时网络搜索** - 获取最新的网络信息
+- 📊 **结构化结果** - 返回标题、URL、摘要和来源引用
+- 🌍 **位置感知搜索** - 支持按国家/地区/城市进行本地化搜索
+- 🔄 **自动重试** - 内置重试机制和超时控制
+- 📝 **详细日志** - 通过 DEBUG 环境变量控制日志级别
+- 🛡️ **类型安全** - 完整的 TypeScript 类型定义
+
+## 前置要求
+
+- Node.js >= 20.0.0
+- MiMo API Key（从 [MiMo 平台](https://mimo.xiaomi.com) 获取）
 
 ## 安装
 
+### 全局安装（推荐）
+
 ```bash
-npm install
+npm install -g mimo-web-search-mcp
+```
+
+### 本地安装
+
+```bash
+npm install mimo-web-search-mcp
 ```
 
 ## 配置
 
-### 环境变量
+### Claude Code 全局配置
 
-| 变量                    | 必需 | 说明                                               |
-| ----------------------- | ---- | -------------------------------------------------- |
-| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      |
-| `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1` |
-| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                 |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                     |
-| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                        |
-| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                     |
-| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=信息，2=调试           |
-
-### Claude Code 配置
-
-#### 1. MCP 服务器配置
-
-在 Claude Code 的 MCP 配置文件中添加：
+编辑 `~/.claude.json` 文件（Windows 用户路径为 `%USERPROFILE%\.claude.json`）：
 
 ```json
 {
   "mcpServers": {
     "mimo-web-search": {
-      "command": "node",
-      "args": ["path/to/mimo-web-search-mcp/server.mjs"],
+      "command": "mimo-web-search",
       "env": {
         "MIMO_API_KEY": "your-api-key-here"
       }
@@ -51,68 +52,105 @@ npm install
 }
 ```
 
-#### 2. 全局指令配置（推荐）
+### 环境变量
 
-在全局 CLAUDE.md 中添加，让 Claude Code 在所有项目中都知道这个 MCP 工具：
+| 变量                    | 必需 | 说明                                               | 默认值                              |
+| ----------------------- | ---- | -------------------------------------------------- | ----------------------------------- |
+| `MIMO_API_KEY`          | 是   | MiMo API 密钥                                      | -                                   |
+| `MIMO_BASE_URL`         | 否   | API 基础 URL                                       | `https://api.xiaomimimo.com/v1`    |
+| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒）                               | `60000`                            |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                  | `2048`                             |
+| `TEMPERATURE`           | 否   | 采样温度（0-2）                                    | `0.2`                              |
+| `TOP_P`                 | 否   | 核采样概率（0-1）                                  | `0.95`                             |
+| `DEBUG`                 | 否   | 日志级别：0=错误，1=信息，2=调试                   | `0`                                |
 
-**文件位置**：`~/.claude/CLAUDE.md`
+## 开发
 
-```markdown
-# 全局指令
+### 安装依赖
 
-## 网络搜索工具
+```bash
+npm install
+```
 
-当需要搜索网络信息时，优先使用 `mimo_web_search` MCP 工具。
+### 开发模式（热重载）
+
+```bash
+npm run dev
+```
+
+### 编译 TypeScript
+
+```bash
+npm run build
+```
+
+### 类型检查
+
+```bash
+npm run typecheck
+```
+
+### 代码检查
+
+```bash
+npm run lint
 ```
 
 ## 使用方法
 
-### MCP 工具
+配置完成后，Claude Code 会自动识别并可用 `mimo_web_search` 工具。
 
-服务器提供一个工具：`mimo_web_search`
+### 在 Claude Code 中使用
 
-#### 参数
-
-| 参数           | 类型       | 默认值 | 说明                 |
-| -------------- | ---------- | ------ | -------------------- |
-| `query`        | string     | 必需   | 搜索查询             |
-| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数 |
-| `limit`        | int (1-50) | 5      | 返回结果数量         |
-| `force_search` | boolean    | true   | 强制搜索             |
-| `country`      | string     | 可选   | 国家                 |
-| `region`       | string     | 可选   | 地区                 |
-| `city`         | string     | 可选   | 城市                 |
-
-#### 示例
-
-```json
-{
-  "query": "最新的人工智能进展",
-  "max_keyword": 5,
-  "limit": 10,
-  "country": "China"
-}
-```
-
-### 返回格式
-
-成功响应：
+直接提问即可，Claude 会自动调用搜索工具：
 
 ```
-搜索结果内容...
+用户: 今天北京天气怎么样？
+Claude: [自动调用 mimo_web_search 查询北京天气]
+```
+
+### 工具参数
+
+| 参数           | 类型       | 默认值 | 说明                               |
+| -------------- | ---------- | ------ | ---------------------------------- |
+| `query`        | string     | 必需   | 搜索查询（最多 10000 字符）       |
+| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数（每个 ¥0.025） |
+| `limit`        | int (1-50) | 5      | 返回结果数量                       |
+| `force_search` | boolean    | true   | 即使模型认为知道答案也强制搜索     |
+| `country`      | string     | 可选   | 国家（如 'China'）                |
+| `region`       | string     | 可选   | 地区/省份（如 'Hubei'）           |
+| `city`         | string     | 可选   | 城市（如 'Wuhan'）                |
+
+### 示例响应
+
+```
+根据搜索结果，北京今天天气晴朗，气温 25°C...
 
 --- Sources ---
-- [标题](URL) — 网站名 (发布时间)
+- [北京天气预报](https://weather.com/beijing) — 中国天气网 (2025-01-15)
+- [北京实时天气](https://www.weather.com.cn) — 中国气象局 (2025-01-15)
 
 --- Usage ---
-Search calls: 3, Pages: 10
-Tokens: 1500 (prompt: 500, completion: 1000)
+Search calls: 2, Pages: 5
+Tokens: 1234 (prompt: 800, completion: 434)
 ```
 
-错误响应：
+## 项目结构
 
 ```
-错误描述和恢复建议
+mimo-web-search-mcp/
+├── src/
+│   ├── index.ts      # MCP 服务器主入口
+│   ├── config.ts     # 配置管理
+│   ├── logger.ts     # 日志工具
+│   └── types.ts      # 类型定义
+├── dist/             # 编译输出（自动忽略）
+├── package.json
+├── tsconfig.json
+├── eslint.config.js
+├── CLAUDE.md
+├── README.md
+└── LICENSE
 ```
 
 ## 安全说明
@@ -129,25 +167,16 @@ Tokens: 1500 (prompt: 500, completion: 1000)
 - **超时错误**：提示服务响应缓慢
 - **网络错误**：提示检查网络连接
 
-## 开发
-
-### 项目结构
-
-```
-mimo-web-search-mcp/
-├── server.mjs          # MCP 服务器主文件
-├── package.json        # 项目配置
-├── CLAUDE.md           # Claude Code 指令
-└── README.md           # 项目说明
-```
-
-### 技术栈
-
-- **运行时**: Node.js (ESM 模块)
-- **MCP SDK**: `@modelcontextprotocol/sdk` v1.x
-- **传输协议**: stdio (标准输入/输出)
-- **验证**: Zod schema
-
 ## 许可证
 
-MIT License
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 致谢
+
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [MiMo API](https://mimo.xiaomi.com)
+- [Claude Code](https://docs.anthropic.com/claude-code)
