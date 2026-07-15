@@ -14,6 +14,8 @@ export interface AppConfig {
   apiKey: string;
   /** API 基础 URL */
   baseUrl: string;
+  /** 模型名称 */
+  model: string;
   /** 请求超时时间（毫秒） */
   requestTimeout: number;
   /** 最大生成 token 数 */
@@ -22,6 +24,10 @@ export interface AppConfig {
   temperature: number;
   /** 核采样概率 */
   topP: number;
+  /** 启用流式响应 */
+  stream: boolean;
+  /** 启用思考模式 */
+  thinking: boolean;
   /** 日志级别 */
   logLevel: LogLevel;
   /** 最大重试次数 */
@@ -32,6 +38,12 @@ export interface AppConfig {
   maxContentLength: number;
   /** 最大并发请求数 */
   maxConcurrent: number;
+  /** 默认最大关键词数 */
+  defaultMaxKeyword: number;
+  /** 默认返回结果数 */
+  defaultLimit: number;
+  /** 查询最大字符数 */
+  maxQueryLength: number;
 }
 
 /** 解析环境变量为整数，失败返回默认值 */
@@ -46,6 +58,12 @@ function parseFloatEnv(value: string | undefined, defaultValue: number): number 
   if (!value) return defaultValue;
   const parsed = parseFloat(value);
   return isNaN(parsed) ? defaultValue : parsed;
+}
+
+/** 解析环境变量为布尔值，失败返回默认值 */
+function parseBoolEnv(value: string | undefined, defaultValue: boolean): boolean {
+  if (!value) return defaultValue;
+  return value === "true" || value === "1";
 }
 
 /** 验证 URL 格式 */
@@ -70,12 +88,15 @@ export function loadConfig(): AppConfig {
     throw new Error(`Invalid MIMO_BASE_URL format: ${baseUrl}`);
   }
 
-  const debugLevel = parseIntEnv(process.env.DEBUG, 0);
+  const debugValue = process.env.DEBUG;
   let logLevel: LogLevel;
-  if (debugLevel >= 2) {
+  if (debugValue && /^\d+$/.test(debugValue)) {
+    // 纯数字：0=ERROR, 1=INFO, 2+=DEBUG
+    const level = parseInt(debugValue, 10);
+    logLevel = level >= 2 ? LogLevel.DEBUG : level >= 1 ? LogLevel.INFO : LogLevel.ERROR;
+  } else if (debugValue && /mimo/i.test(debugValue)) {
+    // 命名空间模式：DEBUG=mimo*、DEBUG=mimo-web-search 等
     logLevel = LogLevel.DEBUG;
-  } else if (debugLevel >= 1) {
-    logLevel = LogLevel.INFO;
   } else {
     logLevel = LogLevel.ERROR;
   }
@@ -83,14 +104,20 @@ export function loadConfig(): AppConfig {
   return {
     apiKey,
     baseUrl,
+    model: process.env.MIMO_MODEL || "mimo-v2.5-pro",
     requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000),
-    maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 2048),
-    temperature: parseFloatEnv(process.env.TEMPERATURE, 0.2),
+    maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 5120),
+    temperature: parseFloatEnv(process.env.TEMPERATURE, 0.4),
     topP: parseFloatEnv(process.env.TOP_P, 0.95),
+    stream: parseBoolEnv(process.env.MIMO_STREAM, false),
+    thinking: parseBoolEnv(process.env.MIMO_THINKING, false),
     logLevel,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
+    maxRetries: parseIntEnv(process.env.MAX_RETRIES, 2),
+    retryDelay: parseIntEnv(process.env.RETRY_DELAY, 1000),
+    maxContentLength: parseIntEnv(process.env.MAX_CONTENT_LENGTH, 100000),
+    maxConcurrent: parseIntEnv(process.env.MAX_CONCURRENT, 10),
+    defaultMaxKeyword: parseIntEnv(process.env.DEFAULT_MAX_KEYWORD, 3),
+    defaultLimit: parseIntEnv(process.env.DEFAULT_LIMIT, 5),
+    maxQueryLength: parseIntEnv(process.env.MAX_QUERY_LENGTH, 10000),
   };
 }

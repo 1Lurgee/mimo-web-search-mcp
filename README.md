@@ -59,11 +59,21 @@ npm run build
 | ----------------------- | ---- | --------------------------------------------------------- | ----------------------------------- |
 | `MIMO_API_KEY`          | 是   | MiMo API 密钥                                             | -                                   |
 | `MIMO_BASE_URL`         | 否   | API 基础 URL                                              | `https://api.xiaomimimo.com/v1`    |
+| `MIMO_MODEL`            | 否   | 模型名称                                                  | `mimo-v2.5-pro`                    |
 | `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒）                                      | `60000`                            |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                         | `2048`                             |
-| `TEMPERATURE`           | 否   | 采样温度（0-2）                                           | `0.2`                              |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数                                         | `5120`                             |
+| `TEMPERATURE`           | 否   | 采样温度（0-2）                                           | `0.4`                              |
 | `TOP_P`                 | 否   | 核采样概率（0-1）                                         | `0.95`                             |
-| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=警告，2=信息，3=调试          | `0`                                |
+| `MIMO_STREAM`           | 否   | 启用流式响应                                              | `false`                            |
+| `MIMO_THINKING`         | 否   | 启用思考模式                                              | `false`                            |
+| `DEBUG`                 | 否   | 日志级别：`0`=错误（默认），`1`=信息，`2`=调试；或命名空间模式 `mimo*` 等 | `0`                 |
+| `MAX_RETRIES`           | 否   | 最大重试次数                                              | `2`                                |
+| `RETRY_DELAY`           | 否   | 重试延迟基数（毫秒）                                      | `1000`                             |
+| `MAX_CONTENT_LENGTH`    | 否   | 响应内容最大字符数                                        | `100000`                           |
+| `MAX_CONCURRENT`        | 否   | 最大并发请求数                                            | `10`                               |
+| `DEFAULT_MAX_KEYWORD`   | 否   | 默认最大关键词数                                          | `3`                                |
+| `DEFAULT_LIMIT`         | 否   | 默认返回结果数                                            | `5`                                |
+| `MAX_QUERY_LENGTH`      | 否   | 查询最大字符数                                            | `10000`                            |
 
 ## 开发
 
@@ -100,16 +110,14 @@ npm run lint
 ### 测试
 
 ```bash
-# 运行所有测试（提交前必跑）
+# 运行所有测试（vitest，提交前必跑）
 npm test
 
-# 快速测试（仅代码质量检查）
-npm run test:quick
+# 监听模式
+npm run test:watch
 
-# 运行特定测试
-npm run test:config   # 配置模块测试
-npm run test:logger   # 日志模块测试
-npm run test:mcp      # MCP 客户端测试（需要 MIMO_API_KEY）
+# 带覆盖率
+npm run test:coverage
 
 # 提交前完整检查（类型检查 + ESLint + 测试）
 npm run precommit
@@ -148,10 +156,6 @@ Claude: [自动调用 mimo_web_search 查询北京天气]
 --- Sources ---
 - [北京天气预报](https://weather.com/beijing) — 中国天气网 (2025-01-15)
 - [北京实时天气](https://www.weather.com.cn) — 中国气象局 (2025-01-15)
-
---- Usage ---
-Search calls: 2, Pages: 5
-Tokens: 1234 (prompt: 800, completion: 434)
 ```
 
 ## 项目结构
@@ -160,19 +164,17 @@ Tokens: 1234 (prompt: 800, completion: 434)
 mimo-web-search-mcp/
 ├── src/
 │   ├── index.ts      # MCP 服务器主入口
-│   ├── config.ts     # 配置管理
+│   ├── config.ts     # 配置管理（环境变量加载与验证）
 │   ├── logger.ts     # 日志工具
-│   └── types.ts      # 类型定义
+│   └── types.ts      # Zod schema + TypeScript 类型定义
 ├── tests/
-│   ├── run-all.mjs           # 统一测试入口
-│   ├── test-utils.mjs        # 测试工具函数
-│   ├── test-code-quality.mjs # 代码质量测试
-│   ├── test-config.mjs       # 配置模块测试
-│   ├── test-logger.mjs       # 日志模块测试
-│   └── test-mcp-client.mjs   # MCP 客户端测试
+│   ├── config.test.ts   # 配置模块测试
+│   ├── logger.test.ts   # 日志模块测试
+│   └── search.test.ts   # 搜索逻辑测试（mock fetch）
 ├── dist/             # 编译输出（自动忽略）
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts
 ├── eslint.config.js
 ├── CLAUDE.md
 ├── README.md
