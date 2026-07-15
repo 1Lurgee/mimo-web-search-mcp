@@ -39,16 +39,14 @@ npm run lint
 # 格式化代码
 npm run format
 
-# 运行所有测试（提交前必跑）
+# 运行所有测试（vitest，提交前必跑）
 npm test
 
-# 快速测试（仅代码质量检查）
-npm run test:quick
+# 监听模式
+npm run test:watch
 
-# 运行特定测试
-npm run test:config   # 配置模块测试
-npm run test:logger   # 日志模块测试
-npm run test:mcp      # MCP 客户端测试（需要 MIMO_API_KEY）
+# 带覆盖率
+npm run test:coverage
 
 # 提交前完整检查
 npm run precommit
@@ -60,11 +58,21 @@ npm run precommit
 | ----------------------- | ---- | --------------------------------------------------------- |
 | `MIMO_API_KEY`          | 是   | MiMo API 密钥                                             |
 | `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1`        |
+| `MIMO_MODEL`            | 否   | 模型名称，默认 `mimo-v2.5-pro`                            |
 | `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                        |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `2048`                            |
-| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.2`                               |
+| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `5120`                            |
+| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.4`                               |
 | `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                            |
-| `DEBUG`                 | 否   | 日志级别：0=错误（默认），1=警告，2=信息，3=调试          |
+| `MIMO_STREAM`           | 否   | 启用流式响应，默认 `false`                                |
+| `MIMO_THINKING`         | 否   | 启用思考模式，默认 `false`                                |
+| `DEBUG`                 | 否   | 日志级别：`0`=错误（默认），`1`=信息，`2`=调试；或命名空间模式 `mimo*` 等 |
+| `MAX_RETRIES`           | 否   | 最大重试次数，默认 `2`                                    |
+| `RETRY_DELAY`           | 否   | 重试延迟基数（毫秒），默认 `1000`                         |
+| `MAX_CONTENT_LENGTH`    | 否   | 响应内容最大字符数，默认 `100000`                         |
+| `MAX_CONCURRENT`        | 否   | 最大并发请求数，默认 `10`                                 |
+| `DEFAULT_MAX_KEYWORD`   | 否   | 默认最大关键词数，默认 `3`                                |
+| `DEFAULT_LIMIT`         | 否   | 默认返回结果数，默认 `5`                                  |
+| `MAX_QUERY_LENGTH`      | 否   | 查询最大字符数，默认 `10000`                              |
 
 ## 架构说明
 
@@ -78,15 +86,13 @@ mimo-web-search-mcp/
 │   ├── logger.ts     # 日志工具
 │   └── types.ts      # TypeScript 类型定义
 ├── tests/
-│   ├── run-all.mjs           # 统一测试入口
-│   ├── test-utils.mjs        # 测试工具函数
-│   ├── test-code-quality.mjs # 代码质量测试
-│   ├── test-config.mjs       # 配置模块测试
-│   ├── test-logger.mjs       # 日志模块测试
-│   └── test-mcp-client.mjs   # MCP 客户端测试
+│   ├── config.test.ts   # 配置模块测试
+│   ├── logger.test.ts   # 日志模块测试
+│   └── search.test.ts   # 搜索逻辑测试（mock fetch）
 ├── dist/                     # 编译输出
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts
 └── eslint.config.js
 ```
 
@@ -115,5 +121,5 @@ mimo-web-search-mcp/
 
 1. Claude Code 通过 stdio 连接到 MCP 服务器
 2. 调用 `mimo_web_search` 工具时，服务器向 MiMo API 发送请求
-3. MiMo 返回搜索结果（包含引用来源和使用统计）
+3. MiMo 返回搜索结果（包含引用来源）
 4. 服务器格式化结果后返回给 Claude Code
