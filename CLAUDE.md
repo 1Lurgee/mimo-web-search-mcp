@@ -61,9 +61,8 @@ npm run precommit
 | `MIMO_MODEL`            | 否   | 模型名称，默认 `mimo-v2.5-pro`                            |
 | `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                        |
 | `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `1024`                            |
-| `TEMPERATURE`           | 否   | 采样温度（0-2），默认 `0.3`                               |
-| `TOP_P`                 | 否   | 核采样概率（0-1），默认 `0.95`                            |
-| `MIMO_STREAM`           | 否   | 启用流式响应，默认 `false`                                |
+| `TEMPERATURE`           | 否   | 采样温度（0-1.5），默认 `0.3`                             |
+| `TOP_P`                 | 否   | 核采样概率（0.01-1.0），默认 `0.95`                       |
 | `MIMO_THINKING`         | 否   | 启用思考模式，默认 `false`                                |
 | `DEBUG`                 | 否   | 日志级别：`0`=错误（默认），`1`=信息，`2`=调试；或命名空间模式 `mimo*` 等 |
 | `MAX_RETRIES`           | 否   | 最大重试次数，默认 `2`                                    |
@@ -84,7 +83,7 @@ mimo-web-search-mcp/
 │   ├── index.ts      # MCP 服务器主入口
 │   ├── config.ts     # 配置管理（环境变量加载与验证）
 │   ├── logger.ts     # 日志工具
-│   └── types.ts      # TypeScript 类型定义
+│   └── types.ts      # Zod schema + TypeScript 类型定义
 ├── tests/
 │   ├── config.test.ts   # 配置模块测试
 │   ├── logger.test.ts   # 日志模块测试
@@ -107,15 +106,15 @@ mimo-web-search-mcp/
 
 服务器注册了一个工具 `mimo_web_search`，参数：
 
-| 参数           | 类型       | 默认值 | 说明                 |
-| -------------- | ---------- | ------ | -------------------- |
-| `query`        | string     | 必需   | 搜索查询             |
-| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数 |
-| `limit`        | int (1-50) | 5      | 返回结果数量         |
-| `force_search` | boolean    | true   | 强制搜索             |
-| `country`      | string     | 可选   | 国家                 |
-| `region`       | string     | 可选   | 地区                 |
-| `city`         | string     | 可选   | 城市                 |
+| 参数           | 类型       | 默认值 | 说明                               |
+| -------------- | ---------- | ------ | ---------------------------------- |
+| `query`        | string     | 必需   | 搜索查询（最多 10000 字符）       |
+| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数（每个 ¥0.025） |
+| `limit`        | int (1-50) | 5      | 返回结果数量                       |
+| `force_search` | boolean    | true   | 即使模型认为知道答案也强制搜索     |
+| `country`      | string     | 可选   | 国家（如 'China'）                |
+| `region`       | string     | 可选   | 地区/省份（如 'Hubei'）           |
+| `city`         | string     | 可选   | 城市（如 'Wuhan'）                |
 
 ### 调用流程
 

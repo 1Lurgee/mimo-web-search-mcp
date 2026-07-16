@@ -3,6 +3,7 @@
  *  Wraps Xiaomi MiMo's web_search API as an MCP tool for Claude Code.
  */
 
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -45,7 +46,10 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
-/** 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构 */
+/**
+ * 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构
+ * 特别处理 Markdown 链接：避免在 ]( 中间截断导致语法损坏
+ */
 function truncateContent(text: string): string {
   if (text.length <= config.maxContentLength) return text;
 
@@ -54,16 +58,25 @@ function truncateContent(text: string): string {
 
   // 依次尝试按段落、换行、句号截断，保留最完整的语义单元
   const boundaries = ["\n\n", "\n", ". "];
+  let cutPoint = -1;
   for (const boundary of boundaries) {
-    const lastIdx = truncated.lastIndexOf(boundary);
-    // 至少保留一半内容，避免截断过短
-    if (lastIdx > config.maxContentLength / 2) {
-      return truncated.substring(0, lastIdx + boundary.length).trimEnd() + truncationNotice;
+    const idx = truncated.lastIndexOf(boundary);
+    if (idx > config.maxContentLength / 2) {
+      cutPoint = idx + boundary.length;
+      break;
     }
   }
 
   // 无合适边界，硬截断
-  return truncated + truncationNotice;
+  const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
+
+  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
+  // ]( 没有对应的 ]  → 说明链接被截断了，移除悬挂的 [
+  if (!base.includes("](")) {
+    return base.replace(/\[[^\]]*$/, "") + truncationNotice;
+  }
+
+  return base + truncationNotice;
 }
 
 /** 延迟指定毫秒 */
@@ -104,13 +117,16 @@ function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
  * 创建超时的 fetch 请求，支持外部 AbortSignal（MCP client 取消时中止请求）
  * @param externalSignal - 来自 MCP SDK 的请求级取消信号，client 断开或发 cancel notification 时触发
  */
+/** 超时 AbortError 的 reason 标识，用于区分超时与 MCP client 取消 */
+const TIMEOUT_REASON = "request_timeout";
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
   externalSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => timeoutController.abort(), config.requestTimeout);
+  const timeoutId = setTimeout(() => timeoutController.abort(TIMEOUT_REASON), config.requestTimeout);
 
   // 合并超时信号和 MCP client 取消信号——任一触发即中止 HTTP 请求
   const combinedSignal = externalSignal
@@ -202,7 +218,9 @@ function handleHttpError(status: number, attempt: number): CallToolResult {
 async function executeSearch(
   params: SearchParams,
   signal?: AbortSignal,
+  reqId: string = randomUUID(),
 ): Promise<CallToolResult> {
+  const log = logger.withReqId(reqId);
   const { query, max_keyword, limit, force_search, country, region, city } = params;
 
   // 构造 web_search tool 配置
@@ -229,19 +247,19 @@ async function executeSearch(
     max_completion_tokens: config.maxCompletionTokens,
     temperature: config.temperature,
     top_p: config.topP,
-    stream: config.stream,
+    stream: false, // 强制非流式：MCP 工具需要完整响应，且 resp.json() 不兼容 SSE 格式
     thinking: { type: config.thinking ? "enabled" : "disabled" },
   };
 
   // 仅在 DEBUG 级别启用时才序列化请求体，避免不必要的 JSON.stringify 开销
-  if (logger.isDebugEnabled()) {
-    logger.debug("Request body:", JSON.stringify(body, null, 2));
+  if (log.isDebugEnabled()) {
+    log.debug("Request body:", JSON.stringify(body, null, 2));
   }
 
   // 重试逻辑
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
-      logger.info(`Sending request (attempt ${attempt + 1}/${config.maxRetries + 1}): ${query.substring(0, 50)}...`);
+      log.info(`Sending request (attempt ${attempt + 1}/${config.maxRetries + 1}): ${query.substring(0, 50)}...`);
 
       const resp = await fetchWithTimeout(
         `${config.baseUrl}/chat/completions`,
@@ -256,7 +274,7 @@ async function executeSearch(
         signal,
       );
 
-      logger.info(`Response status: ${resp.status}`);
+      log.info(`Response status: ${resp.status}`);
 
       if (!resp.ok) {
         await resp.text().catch(() => ""); // 消耗响应体
@@ -268,13 +286,13 @@ async function executeSearch(
       // 解析并校验 JSON 响应（Zod 运行时校验，拒绝结构不符的响应）
       const rawData: unknown = await resp.json();
       // 仅在 DEBUG 级别启用时才序列化响应数据，避免对大响应体的不必要开销
-      if (logger.isDebugEnabled()) {
-        logger.debug("Response data:", JSON.stringify(rawData, null, 2));
+      if (log.isDebugEnabled()) {
+        log.debug("Response data:", JSON.stringify(rawData, null, 2));
       }
 
       const parsed = MimoResponseSchema.safeParse(rawData);
       if (!parsed.success) {
-        logger.error("Response schema validation failed:", parsed.error.message);
+        log.error("Response schema validation failed:", parsed.error.message);
         return {
           content: [{ type: "text", text: "Invalid response format from MiMo API. Please try again." }],
           isError: true,
@@ -301,7 +319,7 @@ async function executeSearch(
           isError: true,
         };
       }
-      logger.info(`Response parsed. Content length: ${resultText.length}`);
+      log.info(`Response parsed. Content length: ${resultText.length}`);
       return { content: [{ type: "text", text: resultText }] };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -312,13 +330,23 @@ async function executeSearch(
         continue;
       }
 
-      // 超时 → 直接返回（不重试，避免用户等待更久）
+      // AbortError 区分两种来源：
+      // 1. MCP client 主动取消 → 立即返回，不重试
+      // 2. 内部超时 → 可重试（服务器可能暂时繁忙）
       if (error.name === "AbortError") {
+        const isTimeout = "cause" in error && (error as { cause: unknown }).cause === TIMEOUT_REASON;
+        if (isTimeout && attempt < config.maxRetries) {
+          log.info(`Request timed out, retrying (attempt ${attempt + 1}/${config.maxRetries + 1})`);
+          await delay(calculateRetryDelay(attempt));
+          continue;
+        }
         return {
           content: [
             {
               type: "text",
-              text: "Request timed out. The MiMo service may be slow or unavailable. Please try again later.",
+              text: isTimeout
+                ? "Request timed out after retries. The MiMo service may be slow or unavailable. Please try again later."
+                : "Request cancelled by client.",
             },
           ],
           isError: true,
@@ -378,10 +406,12 @@ server.tool(
   async (
     { query, max_keyword, limit, force_search, country, region, city },
     { signal },
-  ): Promise<CallToolResult> =>
-    limitConcurrency(() =>
-      executeSearch({ query, max_keyword, limit, force_search, country, region, city }, signal),
-    ),
+  ): Promise<CallToolResult> => {
+    const reqId = randomUUID().slice(0, 8);
+    return limitConcurrency(() =>
+      executeSearch({ query, max_keyword, limit, force_search, country, region, city }, signal, reqId),
+    );
+  },
 );
 
 // ── 启动 ──────────────────────────────────────────────

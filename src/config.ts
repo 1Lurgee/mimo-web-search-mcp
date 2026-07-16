@@ -24,8 +24,6 @@ export interface AppConfig {
   temperature: number;
   /** 核采样概率 */
   topP: number;
-  /** 启用流式响应 */
-  stream: boolean;
   /** 启用思考模式 */
   thinking: boolean;
   /** 日志级别 */
@@ -60,11 +58,18 @@ function parseIntEnv(value: string | undefined, defaultValue: number, min: numbe
   return Math.max(min, Math.min(max, parsed));
 }
 
-/** 解析环境变量为浮点数，失败返回默认值 */
-function parseFloatEnv(value: string | undefined, defaultValue: number): number {
+/**
+ * 解析环境变量为浮点数，失败返回默认值，限制在 [min, max] 范围内
+ * @param value - 环境变量原始值
+ * @param defaultValue - 默认值
+ * @param min - 最小值（含）
+ * @param max - 最大值（含）
+ */
+function parseFloatEnv(value: string | undefined, defaultValue: number, min: number, max: number): number {
   if (!value) return defaultValue;
   const parsed = parseFloat(value);
-  return isNaN(parsed) ? defaultValue : parsed;
+  if (isNaN(parsed)) return defaultValue;
+  return Math.max(min, Math.min(max, parsed));
 }
 
 /** 解析环境变量为布尔值，失败返回默认值 */
@@ -117,9 +122,8 @@ export function loadConfig(): AppConfig {
     model: process.env.MIMO_MODEL || "mimo-v2.5-pro",
     requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000, 1000, 300000),      // 1秒 ~ 5分钟
     maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 1024, 1, 100000),
-    temperature: parseFloatEnv(process.env.TEMPERATURE, 0.3),
-    topP: parseFloatEnv(process.env.TOP_P, 0.95),
-    stream: parseBoolEnv(process.env.MIMO_STREAM, false),
+    temperature: parseFloatEnv(process.env.TEMPERATURE, 0.3, 0, 1.5),
+    topP: parseFloatEnv(process.env.TOP_P, 0.95, 0.01, 1.0),
     thinking: parseBoolEnv(process.env.MIMO_THINKING, false),
     logLevel,
     maxRetries: parseIntEnv(process.env.MAX_RETRIES, 2, 0, 10),                          // 0 ~ 10 次
