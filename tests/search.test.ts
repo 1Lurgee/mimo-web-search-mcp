@@ -408,9 +408,11 @@ describe("mimo_web_search 工具", () => {
 
   // ── 网络错误 ─────────────────────────────────────
 
-  it("超时返回超时错误", async () => {
-    const abortError = new Error("The operation was aborted");
-    abortError.name = "AbortError";
+  it("超时重试耗尽后返回超时错误", async () => {
+    const abortError = new DOMException("The operation was aborted.", "AbortError") as DOMException & {
+      cause: unknown;
+    };
+    (abortError as unknown as { cause: unknown }).cause = "request_timeout";
     vi.stubGlobal("fetch", mockFetchError(abortError));
 
     const result = (await callHandler({
@@ -421,7 +423,45 @@ describe("mimo_web_search 工具", () => {
     })) as { isError: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("timed out");
+    expect(result.content[0].text).toContain("timed out after retries");
+  });
+
+  it("超时重试后成功", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          const err = new DOMException("The operation was aborted.", "AbortError") as DOMException & {
+            cause: unknown;
+          };
+          (err as unknown as { cause: unknown }).cause = "request_timeout";
+          throw err;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{ message: { content: "重试成功" } }],
+            usage: {},
+          }),
+          text: async () => "",
+          headers: new Headers(),
+        } as Response;
+      }),
+    );
+
+    const result = (await callHandler({
+      query: "test",
+      max_keyword: 3,
+      limit: 5,
+      force_search: true,
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain("重试成功");
+    expect(callCount).toBe(2);
   });
 
   it("ECONNRESET 重试后成功", async () => {
@@ -548,6 +588,35 @@ describe("mimo_web_search 工具", () => {
     expect(result.content[0].text).toContain("Content truncated");
   });
 
+  it("截断不产生悬挂的 Markdown 链接语法", async () => {
+    // 构造在截断点附近有 Markdown 链接的内容
+    // 填充内容使截断点恰好落在链接的 [title](url) 中间
+    const padding = "word ".repeat(25000); // ~125000 chars，超过 maxContentLength
+    const contentWithLink = padding + "Check [this important link](https://example.com/very/long/path) for details.";
+    vi.stubGlobal(
+      "fetch",
+      mockFetchJson(200, {
+        choices: [{ message: { content: contentWithLink } }],
+        usage: {},
+      }),
+    );
+
+    const result = (await callHandler({
+      query: "test",
+      max_keyword: 3,
+      limit: 5,
+      force_search: true,
+    })) as { content: Array<{ text: string }> };
+
+    const text = result.content[0].text;
+    // 不应包含不完整的链接语法：[text 后面没有 ](
+    const incompleteLink = /\[[^\]]*\n/.exec(text);
+    // 核心断言：截断后的文本中不应出现悬挂的 [ 没有对应 ](
+    const openBrackets = (text.match(/\[/g) ?? []).length;
+    const closeBrackets = (text.match(/\]/g) ?? []).length;
+    expect(openBrackets).toBeLessThanOrEqual(closeBrackets + 1); // 允许截断通知的 [Content truncated...]
+  });
+
   // ── MCP Client 取消信号 ────────────────────────────
 
   it("MCP client 取消信号中止进行中的 fetch 请求", async () => {
@@ -581,7 +650,7 @@ describe("mimo_web_search 工具", () => {
     )) as { isError: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("timed out");
+    expect(result.content[0].text).toContain("cancelled by client");
     // 验证 fetch 收到了合并后的 abort signal
     expect(fetchSignal).toBeDefined();
     expect(fetchSignal!.aborted).toBe(true);

@@ -23,7 +23,7 @@ describe("loadConfig", () => {
   beforeEach(() => {
     saveEnv(
       "MIMO_API_KEY", "MIMO_BASE_URL", "MIMO_MODEL", "REQUEST_TIMEOUT",
-      "MAX_COMPLETION_TOKENS", "TEMPERATURE", "TOP_P", "MIMO_STREAM",
+      "MAX_COMPLETION_TOKENS", "TEMPERATURE", "TOP_P",
       "MIMO_THINKING", "DEBUG", "MAX_RETRIES", "RETRY_DELAY",
       "MAX_CONTENT_LENGTH", "MAX_CONCURRENT", "DEFAULT_MAX_KEYWORD",
       "DEFAULT_LIMIT", "MAX_QUERY_LENGTH",
@@ -78,7 +78,6 @@ describe("loadConfig", () => {
     delete process.env.MAX_COMPLETION_TOKENS;
     delete process.env.TEMPERATURE;
     delete process.env.TOP_P;
-    delete process.env.MIMO_STREAM;
     delete process.env.MIMO_THINKING;
     delete process.env.DEBUG;
     delete process.env.MAX_RETRIES;
@@ -97,7 +96,6 @@ describe("loadConfig", () => {
     expect(config.maxCompletionTokens).toBe(1024);
     expect(config.temperature).toBe(0.3);
     expect(config.topP).toBe(0.95);
-    expect(config.stream).toBe(false);
     expect(config.thinking).toBe(false);
     expect(config.logLevel).toBe(0); // ERROR
     expect(config.maxRetries).toBe(2);
@@ -119,7 +117,6 @@ describe("loadConfig", () => {
     process.env.MAX_COMPLETION_TOKENS = "1024";
     process.env.TEMPERATURE = "0.8";
     process.env.TOP_P = "0.5";
-    process.env.MIMO_STREAM = "true";
     process.env.MIMO_THINKING = "true";
     process.env.DEBUG = "2";
     process.env.MAX_RETRIES = "5";
@@ -138,7 +135,6 @@ describe("loadConfig", () => {
     expect(config.maxCompletionTokens).toBe(1024);
     expect(config.temperature).toBe(0.8);
     expect(config.topP).toBe(0.5);
-    expect(config.stream).toBe(true);
     expect(config.thinking).toBe(true);
     expect(config.logLevel).toBe(3); // DEBUG
     expect(config.maxRetries).toBe(5);
@@ -219,35 +215,37 @@ describe("loadConfig", () => {
     expect(config.temperature).toBe(0.3);
   });
 
+  // ── 浮点数范围限制 ─────────────────────────────────
+
+  it("TEMPERATURE 负值被钳制到 0", async () => {
+    process.env.MIMO_API_KEY = "test-key";
+    process.env.TEMPERATURE = "-0.5";
+    const config = await loadConfig();
+    expect(config.temperature).toBe(0);
+  });
+
+  it("TEMPERATURE 超过 1.5 被钳制到 1.5", async () => {
+    process.env.MIMO_API_KEY = "test-key";
+    process.env.TEMPERATURE = "2.0";
+    const config = await loadConfig();
+    expect(config.temperature).toBe(1.5);
+  });
+
+  it("TOP_P 低于 0.01 被钳制到 0.01", async () => {
+    process.env.MIMO_API_KEY = "test-key";
+    process.env.TOP_P = "0";
+    const config = await loadConfig();
+    expect(config.topP).toBe(0.01);
+  });
+
+  it("TOP_P 超过 1.0 被钳制到 1.0", async () => {
+    process.env.MIMO_API_KEY = "test-key";
+    process.env.TOP_P = "1.5";
+    const config = await loadConfig();
+    expect(config.topP).toBe(1.0);
+  });
+
   // ── 布尔值解析 ───────────────────────────────────
-
-  it("MIMO_STREAM=true 解析为 true", async () => {
-    process.env.MIMO_API_KEY = "test-key";
-    process.env.MIMO_STREAM = "true";
-    const config = await loadConfig();
-    expect(config.stream).toBe(true);
-  });
-
-  it("MIMO_STREAM=1 解析为 true", async () => {
-    process.env.MIMO_API_KEY = "test-key";
-    process.env.MIMO_STREAM = "1";
-    const config = await loadConfig();
-    expect(config.stream).toBe(true);
-  });
-
-  it("MIMO_STREAM=false 解析为 false", async () => {
-    process.env.MIMO_API_KEY = "test-key";
-    process.env.MIMO_STREAM = "false";
-    const config = await loadConfig();
-    expect(config.stream).toBe(false);
-  });
-
-  it("MIMO_STREAM 未设置时默认 false", async () => {
-    process.env.MIMO_API_KEY = "test-key";
-    delete process.env.MIMO_STREAM;
-    const config = await loadConfig();
-    expect(config.stream).toBe(false);
-  });
 
   it("MIMO_THINKING=true 解析为 true", async () => {
     process.env.MIMO_API_KEY = "test-key";

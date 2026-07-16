@@ -11,7 +11,6 @@ function makeConfig(level: LogLevel): AppConfig {
     maxCompletionTokens: 5120,
     temperature: 0.4,
     topP: 0.95,
-    stream: false,
     thinking: false,
     logLevel: level,
     maxRetries: 2,
@@ -108,5 +107,43 @@ describe("createLogger", () => {
     const logger = createLogger(makeConfig(LogLevel.ERROR));
     logger.error("critical");
     expect(stderrSpy).toHaveBeenCalledOnce();
+  });
+
+  // ── 请求级子日志器 ─────────────────────────────────
+
+  it("withReqId 子日志器带请求 ID 前缀", () => {
+    const logger = createLogger(makeConfig(LogLevel.DEBUG));
+    const reqLogger = logger.withReqId("abc12345");
+
+    reqLogger.info("test");
+
+    expect(stderrSpy).toHaveBeenCalledWith("[mimo-web-search] [req:abc12345]", "test");
+  });
+
+  it("withReqId 子日志器继承日志级别过滤", () => {
+    const logger = createLogger(makeConfig(LogLevel.ERROR));
+    const reqLogger = logger.withReqId("abc12345");
+
+    reqLogger.info("should not appear");
+    reqLogger.error("should appear");
+
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    expect(stderrSpy).toHaveBeenCalledWith("[mimo-web-search] [req:abc12345]", "should appear");
+  });
+
+  it("withReqId 子日志器的 isDebugEnabled 继承父级", () => {
+    const logger = createLogger(makeConfig(LogLevel.DEBUG));
+    const reqLogger = logger.withReqId("abc12345");
+
+    expect(reqLogger.isDebugEnabled()).toBe(true);
+  });
+
+  it("withReqId 可链式调用（前缀叠加）", () => {
+    const logger = createLogger(makeConfig(LogLevel.DEBUG));
+    const reqLogger = logger.withReqId("first").withReqId("second");
+
+    reqLogger.info("msg");
+
+    expect(stderrSpy).toHaveBeenCalledWith("[mimo-web-search] [req:first] [req:second]", "msg");
   });
 });
