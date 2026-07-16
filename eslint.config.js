@@ -24,6 +24,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["node_modules/", "dist/", "package-lock.json", "eslint.config.js", "tests/"],
+    ignores: ["node_modules/", "dist/", "coverage/", "package-lock.json", "eslint.config.js", "tests/", "vitest.config.ts"],
   },
 );
