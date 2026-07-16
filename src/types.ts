@@ -82,13 +82,13 @@ export interface UserLocation {
 /** MiMo API 请求体 */
 export interface MimoRequestBody {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: "user"; content: string }>;
   tools: WebSearchToolConfig[];
   max_completion_tokens: number;
   temperature: number;
   top_p: number;
   stream: boolean;
-  thinking: { type: string };
+  thinking: { type: "enabled" | "disabled" };
 }
 
 /** 搜索参数 */

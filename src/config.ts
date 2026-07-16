@@ -46,11 +46,18 @@ export interface AppConfig {
   maxQueryLength: number;
 }
 
-/** 解析环境变量为整数，失败返回默认值 */
-function parseIntEnv(value: string | undefined, defaultValue: number): number {
+/**
+ * 解析环境变量为整数，失败返回默认值，限制在 [min, max] 范围内
+ * @param value - 环境变量原始值
+ * @param defaultValue - 默认值
+ * @param min - 最小值（含）
+ * @param max - 最大值（含）
+ */
+function parseIntEnv(value: string | undefined, defaultValue: number, min: number, max: number): number {
   if (!value) return defaultValue;
   const parsed = parseInt(value, 10);
-  return isNaN(parsed) ? defaultValue : parsed;
+  if (isNaN(parsed)) return defaultValue;
+  return Math.max(min, Math.min(max, parsed));
 }
 
 /** 解析环境变量为浮点数，失败返回默认值 */
@@ -66,11 +73,14 @@ function parseBoolEnv(value: string | undefined, defaultValue: boolean): boolean
   return value === "true" || value === "1";
 }
 
-/** 验证 URL 格式 */
+/**
+ * 验证 URL 格式，限制为 HTTPS 协议
+ * 防止 SSRF 攻击：禁止 file://、ftp:// 等非 HTTP(S) 协议
+ */
 function validateUrl(url: string): boolean {
   try {
-    new URL(url);
-    return true;
+    const parsed = new URL(url);
+    return parsed.protocol === "https:";
   } catch {
     return false;
   }
@@ -105,19 +115,19 @@ export function loadConfig(): AppConfig {
     apiKey,
     baseUrl,
     model: process.env.MIMO_MODEL || "mimo-v2.5-pro",
-    requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000),
-    maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 1024),
+    requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000, 1000, 300000),      // 1秒 ~ 5分钟
+    maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 1024, 1, 100000),
     temperature: parseFloatEnv(process.env.TEMPERATURE, 0.3),
     topP: parseFloatEnv(process.env.TOP_P, 0.95),
     stream: parseBoolEnv(process.env.MIMO_STREAM, false),
     thinking: parseBoolEnv(process.env.MIMO_THINKING, false),
     logLevel,
-    maxRetries: parseIntEnv(process.env.MAX_RETRIES, 2),
-    retryDelay: parseIntEnv(process.env.RETRY_DELAY, 1000),
-    maxContentLength: parseIntEnv(process.env.MAX_CONTENT_LENGTH, 100000),
-    maxConcurrent: parseIntEnv(process.env.MAX_CONCURRENT, 10),
-    defaultMaxKeyword: parseIntEnv(process.env.DEFAULT_MAX_KEYWORD, 3),
-    defaultLimit: parseIntEnv(process.env.DEFAULT_LIMIT, 5),
-    maxQueryLength: parseIntEnv(process.env.MAX_QUERY_LENGTH, 10000),
+    maxRetries: parseIntEnv(process.env.MAX_RETRIES, 2, 0, 10),                          // 0 ~ 10 次
+    retryDelay: parseIntEnv(process.env.RETRY_DELAY, 1000, 100, 60000),                  // 100ms ~ 1分钟
+    maxContentLength: parseIntEnv(process.env.MAX_CONTENT_LENGTH, 100000, 1000, 1000000), // 1KB ~ 1MB
+    maxConcurrent: parseIntEnv(process.env.MAX_CONCURRENT, 10, 1, 100),                   // 1 ~ 100
+    defaultMaxKeyword: parseIntEnv(process.env.DEFAULT_MAX_KEYWORD, 3, 1, 50),            // 1 ~ 50
+    defaultLimit: parseIntEnv(process.env.DEFAULT_LIMIT, 5, 1, 50),                       // 1 ~ 50
+    maxQueryLength: parseIntEnv(process.env.MAX_QUERY_LENGTH, 10000, 100, 100000),        // 100 ~ 100K 字符
   };
 }

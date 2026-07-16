@@ -4,8 +4,18 @@ import { type AppConfig, LogLevel } from "./config.js";
 
 const PREFIX = "[mimo-web-search]";
 
+/** 日志器实例类型 */
+export interface Logger {
+  error: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+  /** 检查是否启用了 DEBUG 级别，用于避免昂贵的日志参数计算 */
+  isDebugEnabled: () => boolean;
+}
+
 /** 创建日志器实例 */
-export function createLogger(config: AppConfig) {
+export function createLogger(config: AppConfig): Logger {
   const { logLevel } = config;
 
   function log(level: LogLevel, ...args: unknown[]): void {
@@ -20,7 +30,7 @@ export function createLogger(config: AppConfig) {
     warn: (...args: unknown[]) => log(LogLevel.WARN, ...args),
     info: (...args: unknown[]) => log(LogLevel.INFO, ...args),
     debug: (...args: unknown[]) => log(LogLevel.DEBUG, ...args),
+    /** 检查是否启用了 DEBUG 级别，用于避免昂贵的日志参数计算 */
+    isDebugEnabled: () => logLevel >= LogLevel.DEBUG,
   };
 }
-
-export type Logger = ReturnType<typeof createLogger>;
