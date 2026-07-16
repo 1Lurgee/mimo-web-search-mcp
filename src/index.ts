@@ -37,9 +37,16 @@ const limitConcurrency = pLimit(config.maxConcurrent);
 
 // ── 辅助函数 ─────────────────────────────────────────
 
+/**
+ * 类型守卫：检查错误是否为 Node.js 系统错误（带 code 属性）
+ * 用于统一处理 ECONNRESET、ECONNREFUSED、ENOTFOUND 等网络错误
+ */
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err;
+}
+
 /** 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构 */
 function truncateContent(text: string): string {
-  if (!text || typeof text !== "string") return text;
   if (text.length <= config.maxContentLength) return text;
 
   const truncated = text.substring(0, config.maxContentLength);
@@ -65,11 +72,29 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
+ * 计算带 jitter 的重试延迟（指数退避 + 随机抖动）
+ * 避免多个实例同时重试造成请求洪峰（惊群效应）
+ * @param attempt - 当前重试次数（从 0 开始）
+ * @returns 延迟毫秒数
+ */
+function calculateRetryDelay(attempt: number): number {
+  const exponentialDelay = config.retryDelay * Math.pow(2, attempt);
+  const jitter = Math.random() * exponentialDelay * 0.5; // 0 ~ 50% 的随机抖动
+  return exponentialDelay + jitter;
+}
+
+/**
  * 合并多个 AbortSignal 为一个——任一信号触发即中止。
  * Node.js >= 20 原生支持 AbortSignal.any()，无需 polyfill。
+ *
+ * Bug fix: 如果任何信号已中止，立即返回已中止的信号，
+ * 而不是过滤掉它导致取消语义丢失。
  */
 function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
-  const valid = signals.filter((s) => s && !s.aborted);
+  // 如果任一信号已中止，立即返回已中止状态
+  if (signals.some((s) => s?.aborted)) return AbortSignal.abort();
+
+  const valid = signals.filter((s) => s);
   if (valid.length === 0) return AbortSignal.abort();
   if (valid.length === 1) return valid[0];
   return AbortSignal.any(valid);
@@ -101,10 +126,14 @@ async function fetchWithTimeout(
 
 // ── 搜索逻辑 ─────────────────────────────────────────
 
-/** 格式化搜索结果（调用方已校验 choices 非空） */
-function formatResult(data: MimoResponse): string {
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- safeParse 已校验 choices 非空
-  const message = data.choices![0].message!;
+/**
+ * 格式化搜索结果
+ * @returns 格式化后的文本，或 null 表示响应无效（choices 为空或 message 缺失）
+ */
+function formatResult(data: MimoResponse): string | null {
+  // 安全访问：choices 和 message 都可能为 undefined
+  const message = data.choices?.[0]?.message;
+  if (!message) return null;
 
   // 先截断 content，再拼接 sources，确保引用来源不被截断
   let result = truncateContent(message.content || "(no content)");
@@ -116,7 +145,8 @@ function formatResult(data: MimoResponse): string {
     for (const a of annotations) {
       const title = a.title || "untitled";
       const siteName = a.site_name || "unknown";
-      result += `\n- [${title}](${a.url}) — ${siteName} (${a.publish_time || "n/a"})`;
+      const url = a.url || "#";
+      result += `\n- [${title}](${url}) — ${siteName} (${a.publish_time || "n/a"})`;
     }
   }
 
@@ -203,7 +233,10 @@ async function executeSearch(
     thinking: { type: config.thinking ? "enabled" : "disabled" },
   };
 
-  logger.debug("Request body:", JSON.stringify(body, null, 2));
+  // 仅在 DEBUG 级别启用时才序列化请求体，避免不必要的 JSON.stringify 开销
+  if (logger.isDebugEnabled()) {
+    logger.debug("Request body:", JSON.stringify(body, null, 2));
+  }
 
   // 重试逻辑
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
@@ -234,7 +267,10 @@ async function executeSearch(
 
       // 解析并校验 JSON 响应（Zod 运行时校验，拒绝结构不符的响应）
       const rawData: unknown = await resp.json();
-      logger.debug("Response data:", JSON.stringify(rawData, null, 2));
+      // 仅在 DEBUG 级别启用时才序列化响应数据，避免对大响应体的不必要开销
+      if (logger.isDebugEnabled()) {
+        logger.debug("Response data:", JSON.stringify(rawData, null, 2));
+      }
 
       const parsed = MimoResponseSchema.safeParse(rawData);
       if (!parsed.success) {
@@ -259,14 +295,20 @@ async function executeSearch(
       }
 
       const resultText = formatResult(data);
+      if (resultText === null) {
+        return {
+          content: [{ type: "text", text: "Empty response from MiMo API." }],
+          isError: true,
+        };
+      }
       logger.info(`Response parsed. Content length: ${resultText.length}`);
       return { content: [{ type: "text", text: resultText }] };
     } catch (err) {
-      const error = err as Error & { name?: string };
+      const error = err instanceof Error ? err : new Error(String(err));
 
       // 可重试的 HTTP 错误（429 / 5xx）→ 延迟后继续循环
       if (error instanceof RetryableError) {
-        await delay(config.retryDelay * (attempt + 1));
+        await delay(calculateRetryDelay(attempt));
         continue;
       }
 
@@ -284,9 +326,8 @@ async function executeSearch(
       }
 
       // 可恢复的连接错误 → 重试（DNS 失败 ENOTFOUND 不重试，重试无意义）
-      const nodeError = err as NodeJS.ErrnoException;
-      if (attempt < config.maxRetries && (nodeError.code === "ECONNRESET" || nodeError.code === "ECONNREFUSED")) {
-        await delay(config.retryDelay * (attempt + 1));
+      if (attempt < config.maxRetries && isNodeError(err) && (err.code === "ECONNRESET" || err.code === "ECONNREFUSED")) {
+        await delay(calculateRetryDelay(attempt));
         continue;
       }
 
