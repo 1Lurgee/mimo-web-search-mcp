@@ -80,13 +80,16 @@ npm run precommit
 ```
 mimo-web-search-mcp/
 ├── src/
-│   ├── index.ts      # MCP 服务器主入口
+│   ├── index.ts      # 启动入口（优雅关闭、信号处理）
+│   ├── server.ts     # MCP 协议层（工具注册、并发控制）
+│   ├── search.ts     # 搜索业务逻辑（HTTP 客户端、重试、格式化）
 │   ├── config.ts     # 配置管理（环境变量加载与验证）
 │   ├── logger.ts     # 日志工具
 │   └── types.ts      # Zod schema + TypeScript 类型定义
 ├── tests/
 │   ├── config.test.ts   # 配置模块测试
 │   ├── logger.test.ts   # 日志模块测试
+│   ├── types.test.ts    # 类型定义测试
 │   └── search.test.ts   # 搜索逻辑测试（mock fetch）
 ├── dist/                     # 编译输出
 ├── package.json
@@ -98,7 +101,7 @@ mimo-web-search-mcp/
 ### 技术特点
 
 - **类型安全**: 严格 TypeScript 模式，完整的类型定义
-- **模块化**: 配置、日志、类型分离
+- **模块化**: 三层分离——业务逻辑（search）、MCP 协议（server）、启动入口（index）
 - **MCP 工具**: 注册 `mimo_web_search` 工具，支持 Zod schema 验证
 - **传输协议**: stdio (标准输入/输出)
 
