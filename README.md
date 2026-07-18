@@ -20,7 +20,7 @@
 ## 获取源码
 
 ```bash
-git clone https://github.com/your-username/mimo-web-search-mcp.git
+git clone https://github.com/1Lurgee/mimo-web-search-mcp.git
 cd mimo-web-search-mcp
 npm install
 npm run build
@@ -161,13 +161,16 @@ Claude: [自动调用 mimo_web_search 查询北京天气]
 ```
 mimo-web-search-mcp/
 ├── src/
-│   ├── index.ts      # MCP 服务器主入口
+│   ├── index.ts      # 启动入口（优雅关闭、信号处理）
+│   ├── server.ts     # MCP 协议层（工具注册、并发控制）
+│   ├── search.ts     # 搜索业务逻辑（HTTP 客户端、重试、格式化）
 │   ├── config.ts     # 配置管理（环境变量加载与验证）
 │   ├── logger.ts     # 日志工具
 │   └── types.ts      # Zod schema + TypeScript 类型定义
 ├── tests/
 │   ├── config.test.ts   # 配置模块测试
 │   ├── logger.test.ts   # 日志模块测试
+│   ├── types.test.ts    # 类型定义测试
 │   └── search.test.ts   # 搜索逻辑测试（mock fetch）
 ├── dist/             # 编译输出（自动忽略）
 ├── package.json
