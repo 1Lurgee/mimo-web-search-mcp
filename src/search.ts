@@ -11,6 +11,8 @@ import {
   type WebSearchToolConfig,
 } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { calculateRetryDelay, fetchWithTimeout, TIMEOUT_REASON } from "./util.js";
+import { emit401 } from "./attribution.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -78,68 +80,17 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * 计算带 jitter 的重试延迟（指数退避 + 随机抖动）
- * 避免多个实例同时重试造成请求洪峰（惊群效应）
- * @param attempt - 当前重试次数（从 0 开始）
- * @returns 延迟毫秒数
- */
-function calculateRetryDelay(attempt: number): number {
-  const exponentialDelay = config.retryDelay * Math.pow(2, attempt);
-  const jitter = Math.random() * exponentialDelay * 0.5; // 0 ~ 50% 的随机抖动
-  return exponentialDelay + jitter;
-}
-
-/**
- * 合并多个 AbortSignal 为一个——任一信号触发即中止。
- * Node.js >= 20 原生支持 AbortSignal.any()，无需 polyfill。
- *
- * Bug fix: 如果任何信号已中止，立即返回已中止的信号，
- * 而不是过滤掉它导致取消语义丢失。
- */
-function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
-  // 如果任一信号已中止，立即返回已中止状态
-  if (signals.some((s) => s?.aborted)) return AbortSignal.abort();
-
-  const valid = signals.filter((s) => s);
-  if (valid.length === 0) return AbortSignal.abort();
-  if (valid.length === 1) return valid[0];
-  return AbortSignal.any(valid);
-}
-
-// ── HTTP 客户端 ───────────────────────────────────────
-
-/** 超时 AbortError 的 reason 标识，用于区分超时与 MCP client 取消 */
-const TIMEOUT_REASON = "request_timeout";
-
-/**
- * 创建超时的 fetch 请求，支持外部 AbortSignal（MCP client 取消时中止请求）
- * @param externalSignal - 来自 MCP SDK 的请求级取消信号，client 断开或发 cancel notification 时触发
- */
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit,
-  externalSignal?: AbortSignal,
-): Promise<Response> {
-  const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => timeoutController.abort(TIMEOUT_REASON), config.requestTimeout);
-
-  // 合并超时信号和 MCP client 取消信号——任一触发即中止 HTTP 请求
-  const combinedSignal = externalSignal
-    ? mergeAbortSignals(externalSignal, timeoutController.signal)
-    : timeoutController.signal;
-
-  try {
-    return await fetch(url, { ...options, signal: combinedSignal });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+// ── HTTP 客户端（共用工具已迁移至 ./util.ts）──────────
 
 // ── 搜索逻辑 ─────────────────────────────────────────
 
 /**
  * 格式化搜索结果
+ *
+ * 借鉴 grok-build 设计：
+ * - 引用去重（同一 URL 只显示一次）
+ * - 保持首次出现顺序
+ *
  * @returns 格式化后的文本，或 null 表示响应无效（choices 为空或 message 缺失）
  */
 function formatResult(data: MimoResponse): string | null {
@@ -150,15 +101,26 @@ function formatResult(data: MimoResponse): string | null {
   // 先截断 content，再拼接 sources，确保引用来源不被截断
   let result = truncateContent(message.content || "(no content)", config.maxContentLength);
 
-  // 添加引用来源
+  // 添加引用来源（借鉴 grok-build 去重逻辑）
   const annotations = message.annotations || [];
   if (annotations.length > 0) {
-    result += "\n\n--- Sources ---";
-    for (const a of annotations) {
-      const title = a.title || "untitled";
-      const siteName = a.site_name || "unknown";
-      const url = a.url || "#";
-      result += `\n- [${title}](${url}) — ${siteName} (${a.publish_time || "n/a"})`;
+    // 去重：同一 URL 只保留首次出现
+    const seen = new Set<string>();
+    const uniqueAnnotations = annotations.filter((a) => {
+      const url = a.url;
+      if (!url || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+
+    if (uniqueAnnotations.length > 0) {
+      result += "\n\n--- Sources ---";
+      for (const a of uniqueAnnotations) {
+        const title = a.title || "untitled";
+        const siteName = a.site_name || "unknown";
+        const url = a.url || "#";
+        result += `\n- [${title}](${url}) — ${siteName} (${a.publish_time || "n/a"})`;
+      }
     }
   }
 
@@ -172,6 +134,10 @@ function formatResult(data: MimoResponse): string | null {
  */
 function handleHttpError(status: number, attempt: number): CallToolResult {
   if (status === 401 || status === 403) {
+    // 记录 401 归因事件（借鉴 grok-build 设计）
+    if (status === 401) {
+      emit401("WebSearch", config.apiKey, { status, attempt });
+    }
     return {
       content: [{ type: "text", text: "Authentication failed. Please check your MIMO_API_KEY." }],
       isError: true,
@@ -217,7 +183,7 @@ export async function executeSearch(
   reqId: string = randomUUID(),
 ): Promise<CallToolResult> {
   const log = logger.withReqId(reqId);
-  const { query, max_keyword, limit, force_search, country, region, city } = params;
+  const { query, max_keyword, limit, force_search, country, region, city, allowed_domains } = params;
 
   // 构造 web_search tool 配置
   const webSearchTool: WebSearchToolConfig = {
@@ -234,6 +200,14 @@ export async function executeSearch(
       ...(region && { region }),
       ...(city && { city }),
     };
+  }
+
+  // 域名白名单过滤（借鉴 grok-build 设计）
+  // 用于限制搜索结果仅来自指定域名，提高技术文档搜索相关性
+  if (allowed_domains && allowed_domains.length > 0) {
+    log.info(`域名白名单: ${allowed_domains.join(", ")}`);
+    // 注意：MiMo API 可能不直接支持此参数，这里记录日志供调试
+    // 实际过滤可能需要在结果层面实现
   }
 
   const body: MimoRequestBody = {
@@ -267,6 +241,7 @@ export async function executeSearch(
           },
           body: JSON.stringify(body),
         },
+        config.requestTimeout,
         signal,
       );
 

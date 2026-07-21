@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-这是一个 MCP (Model Context Protocol) 服务器，将小米 MiMo 的 web_search API 包装为 Claude Code 可用的搜索工具。
+这是一个 MCP (Model Context Protocol) 服务器，将小米 MiMo 的 web_search API 和网页抓取功能包装为 Claude Code 可用的工具。
 
 ## 技术栈
 
@@ -18,38 +18,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用命令
 
 ```bash
-# 安装依赖
-npm install
-
-# 开发模式（热重载）
-npm run dev
-
-# 编译 TypeScript
-npm run build
-
-# 启动服务器（需要设置 MIMO_API_KEY 环境变量）
-npm start
-
-# 类型检查
-npm run typecheck
-
-# 代码检查
-npm run lint
-
-# 格式化代码
-npm run format
-
-# 运行所有测试（vitest，提交前必跑）
-npm test
-
-# 监听模式
-npm run test:watch
-
-# 带覆盖率
-npm run test:coverage
-
-# 提交前完整检查
-npm run precommit
+npm install          # 安装依赖
+npm run dev          # 开发模式（热重载）
+npm run build        # 编译 TypeScript
+npm start            # 启动服务器（需要 MIMO_API_KEY）
+npm run typecheck    # 类型检查
+npm run lint         # 代码检查
+npm run format       # 格式化代码
+npm test             # 运行测试（vitest）
+npm run precommit    # 提交前完整检查
 ```
 
 ## 环境变量
@@ -58,70 +35,43 @@ npm run precommit
 | ----------------------- | ---- | --------------------------------------------------------- |
 | `MIMO_API_KEY`          | 是   | MiMo API 密钥                                             |
 | `MIMO_BASE_URL`         | 否   | API 基础 URL，默认 `https://api.xiaomimimo.com/v1`        |
-| `MIMO_MODEL`            | 否   | 模型名称，默认 `mimo-v2.5-pro`                            |
-| `REQUEST_TIMEOUT`       | 否   | 请求超时时间（毫秒），默认 `60000`                        |
-| `MAX_COMPLETION_TOKENS` | 否   | 最大生成 token 数，默认 `1024`                            |
-| `TEMPERATURE`           | 否   | 采样温度（0-1.5），默认 `0.3`                             |
-| `TOP_P`                 | 否   | 核采样概率（0.01-1.0），默认 `0.95`                       |
-| `MIMO_THINKING`         | 否   | 启用思考模式，默认 `false`                                |
-| `DEBUG`                 | 否   | 日志级别：`0`=错误（默认），`1`=信息，`2`=调试；或命名空间模式 `mimo*` 等 |
-| `MAX_RETRIES`           | 否   | 最大重试次数，默认 `2`                                    |
-| `RETRY_DELAY`           | 否   | 重试延迟基数（毫秒），默认 `1000`                         |
-| `MAX_CONTENT_LENGTH`    | 否   | 响应内容最大字符数，默认 `100000`                         |
-| `MAX_CONCURRENT`        | 否   | 最大并发请求数，默认 `10`                                 |
-| `DEFAULT_MAX_KEYWORD`   | 否   | 默认最大关键词数，默认 `3`                                |
-| `DEFAULT_LIMIT`         | 否   | 默认返回结果数，默认 `5`                                  |
-| `MAX_QUERY_LENGTH`      | 否   | 查询最大字符数，默认 `10000`                              |
+| `DEBUG`                 | 否   | 日志级别：`0`=错误（默认），`1`=信息，`2`=调试            |
+| `FETCH_TIMEOUT`         | 否   | 抓取超时时间（毫秒），默认 `30000`                        |
+| `MAX_FETCH_SIZE`        | 否   | 最大响应体大小（字节），默认 `10485760`（10MB）            |
+| `MIMO_ENABLE_BROWSER`   | 否   | 启用浏览器渲染（SPA 降级），默认 `false`                  |
 
 ## 架构说明
 
 ### 目录结构
 
 ```
-mimo-web-search-mcp/
-├── src/
-│   ├── index.ts      # 启动入口（优雅关闭、信号处理）
-│   ├── server.ts     # MCP 协议层（工具注册、并发控制）
-│   ├── search.ts     # 搜索业务逻辑（HTTP 客户端、重试、格式化）
-│   ├── config.ts     # 配置管理（环境变量加载与验证）
-│   ├── logger.ts     # 日志工具
-│   └── types.ts      # Zod schema + TypeScript 类型定义
-├── tests/
-│   ├── config.test.ts   # 配置模块测试
-│   ├── logger.test.ts   # 日志模块测试
-│   ├── types.test.ts    # 类型定义测试
-│   └── search.test.ts   # 搜索逻辑测试（mock fetch）
-├── dist/                     # 编译输出
-├── package.json
-├── tsconfig.json
-├── vitest.config.ts
-└── eslint.config.js
+src/
+├── index.ts      # 启动入口（优雅关闭、信号处理）
+├── server.ts     # MCP 协议层（工具注册、并发控制）
+├── search.ts     # 搜索业务逻辑（HTTP 客户端、重试、格式化）
+├── fetch.ts      # 网页抓取核心（流式读取、编码检测、超时）
+├── fetch-tool.ts # 网页抓取 MCP 工具层（validate→fetch→convert→AI）
+├── convert.ts    # HTML 转 Markdown（linkedom + Readability + Turndown）
+├── ssrf.ts       # SSRF 防护（私有 IP 检测、DNS rebinding 复查）
+├── cache.ts      # 网页抓取缓存（LRU + TTL）
+├── render.ts     # SPA 浏览器渲染降级（Playwright）
+├── overflow.ts   # 内容溢出处理（智能截断）
+├── config.ts     # 配置管理（环境变量加载与验证）
+├── logger.ts     # 日志工具（console.error，不污染 MCP stdio）
+└── types.ts      # Zod schema + TypeScript 类型定义
 ```
-
-### 技术特点
-
-- **类型安全**: 严格 TypeScript 模式，完整的类型定义
-- **模块化**: 三层分离——业务逻辑（search）、MCP 协议（server）、启动入口（index）
-- **MCP 工具**: 注册 `mimo_web_search` 工具，支持 Zod schema 验证
-- **传输协议**: stdio (标准输入/输出)
 
 ### MCP 工具
 
-服务器注册了一个工具 `mimo_web_search`，参数：
-
-| 参数           | 类型       | 默认值 | 说明                               |
-| -------------- | ---------- | ------ | ---------------------------------- |
-| `query`        | string     | 必需   | 搜索查询（最多 10000 字符）       |
-| `max_keyword`  | int (1-50) | 3      | 每轮最大并发关键词数（每个 ¥0.025） |
-| `limit`        | int (1-50) | 5      | 返回结果数量                       |
-| `force_search` | boolean    | true   | 即使模型认为知道答案也强制搜索     |
-| `country`      | string     | 可选   | 国家（如 'China'）                |
-| `region`       | string     | 可选   | 地区/省份（如 'Hubei'）           |
-| `city`         | string     | 可选   | 城市（如 'Wuhan'）                |
+- `mimo_web_search` - 网络搜索（支持域名白名单）
+- `mimo_web_fetch` - 网页抓取（支持 AI 处理、SPA 降级）
+- `mimo_cache_stats` - 获取缓存统计
+- `mimo_cache_clear` - 清除缓存
 
 ### 调用流程
 
 1. Claude Code 通过 stdio 连接到 MCP 服务器
-2. 调用 `mimo_web_search` 工具时，服务器向 MiMo API 发送请求
-3. MiMo 返回搜索结果（包含引用来源）
-4. 服务器格式化结果后返回给 Claude Code
+2. 调用工具时，服务器校验参数并执行相应逻辑
+3. 搜索：向 MiMo API 发送请求，格式化结果（引用去重）
+4. 抓取：校验 URL → 检查缓存 → 流式读取 → HTML 转 Markdown → 可选 AI 处理
+5. SPA 页面自动检测，可选 Playwright 浏览器渲染

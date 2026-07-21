@@ -1,6 +1,6 @@
 {
   "name": "mimo-web-search-mcp",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "MCP Server wrapping Xiaomi MiMo web_search API for Claude Code",
   "type": "module",
   "main": "dist/index.js",
@@ -19,20 +19,27 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "precommit": "npm run typecheck && npm run lint && npm run test"
+    "precommit": "npm run typecheck && npm run lint && npm run test",
+    "prepare": "husky",
+    "prepare": "husky"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
     "p-limit": "^7.3.0",
+    "turndown": "^7.2.4",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@types/node": "^22.0.0",
+    "@types/turndown": "^5.0.6",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",
     "globals": "^17.7.0",
+    "husky": "^9.1.7",
     "prettier": "^3.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
@@ -42,6 +49,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "enginesNote": "GBK/GB2312 编码支持需要 Node.js 22+（full-icu）。Node.js 20 默认 small-icu 可能不含 CJK 编码。",
   "files": [
     "dist",
     "README.md",

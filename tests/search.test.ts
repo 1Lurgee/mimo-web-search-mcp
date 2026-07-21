@@ -5,14 +5,16 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vite
 
 type ToolHandler = (args: Record<string, unknown>, extra: { signal: AbortSignal }) => Promise<unknown>;
 
-let capturedHandler: ToolHandler | null = null;
-let capturedToolName: string | null = null;
+const capturedHandlers = new Map<string, ToolHandler>();
 
 vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
   McpServer: class {
-    tool(name: string, _desc: string, _schema: unknown, handler: ToolHandler) {
-      capturedToolName = name;
-      capturedHandler = handler;
+    // 工具注册支持两种签名：
+    //   tool(name, desc, schema, handler)           -- 旧格式
+    //   tool(name, desc, schema, annotations, handler) -- 新格式（含 annotations）
+    tool(name: string, _desc: string, _schema: unknown, maybeAnnotationsOrHandler: unknown, maybeHandler?: ToolHandler) {
+      const handler = (maybeHandler ?? maybeAnnotationsOrHandler) as ToolHandler;
+      capturedHandlers.set(name, handler);
     }
     async connect() {}
   },
@@ -21,9 +23,11 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 /**
  * 包装 capturedHandler，自动补全 MCP SDK 注入的 extra.signal
  * 测试代码不需要关心第二个参数，除非专门测试取消行为
+ * 默认调用 mimo_web_search 工具
  */
 function callHandler(args: Record<string, unknown>, signal?: AbortSignal) {
-  return capturedHandler!(args, { signal: signal ?? new AbortController().signal });
+  const handler = capturedHandlers.get("mimo_web_search")!;
+  return handler(args, { signal: signal ?? new AbortController().signal });
 }
 
 vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
@@ -104,12 +108,13 @@ describe("mimo_web_search 工具", () => {
   // ── 工具注册 ─────────────────────────────────────
 
   it("工具名称为 mimo_web_search", () => {
-    expect(capturedToolName).toBe("mimo_web_search");
+    expect(capturedHandlers.has("mimo_web_search")).toBe(true);
   });
 
   it("handler 已注册", () => {
-    expect(capturedHandler).toBeDefined();
-    expect(typeof capturedHandler).toBe("function");
+    const handler = capturedHandlers.get("mimo_web_search");
+    expect(handler).toBeDefined();
+    expect(typeof handler).toBe("function");
   });
 
   // ── 正常搜索 ─────────────────────────────────────
