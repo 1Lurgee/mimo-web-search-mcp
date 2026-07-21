@@ -100,4 +100,14 @@ export interface SearchParams {
   country?: string;
   region?: string;
   city?: string;
+  /** 域名白名单：仅搜索指定域名的结果（借鉴 grok-build 设计） */
+  allowed_domains?: string[];
+}
+
+/** 网页抓取参数 */
+export interface FetchParams {
+  url: string;
+  prompt?: string;
+  clean: boolean;
+  maxLength: number;
 }

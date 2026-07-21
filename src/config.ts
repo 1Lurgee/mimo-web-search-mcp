@@ -42,6 +42,12 @@ export interface AppConfig {
   defaultLimit: number;
   /** 查询最大字符数 */
   maxQueryLength: number;
+  /** 网页抓取最大内容大小（字节） */
+  maxFetchSize: number;
+  /** 网页抓取超时时间（毫秒） */
+  fetchTimeout: number;
+  /** 启用浏览器渲染（SPA 降级，需先安装 playwright） */
+  enableBrowser: boolean;
 }
 
 /**
@@ -78,6 +84,7 @@ function parseBoolEnv(value: string | undefined, defaultValue: boolean): boolean
   return value === "true" || value === "1";
 }
 
+
 /**
  * 验证 URL 格式，限制为 HTTPS 协议
  * 防止 SSRF 攻击：禁止 file://、ftp:// 等非 HTTP(S) 协议
@@ -89,6 +96,18 @@ function validateUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 获取脱敏配置（安全打印到日志）
+ *
+ * 借鉴 grok-build 设计：api_key 被替换为 "***REDACTED***"
+ */
+export function getRedactedConfig(config: AppConfig): Partial<AppConfig> {
+  return {
+    ...config,
+    apiKey: "***REDACTED***",
+  };
 }
 
 /** 加载并验证配置 */
@@ -133,5 +152,8 @@ export function loadConfig(): AppConfig {
     defaultMaxKeyword: parseIntEnv(process.env.DEFAULT_MAX_KEYWORD, 3, 1, 50),            // 1 ~ 50
     defaultLimit: parseIntEnv(process.env.DEFAULT_LIMIT, 5, 1, 50),                       // 1 ~ 50
     maxQueryLength: parseIntEnv(process.env.MAX_QUERY_LENGTH, 10000, 100, 100000),        // 100 ~ 100K 字符
+    maxFetchSize: parseIntEnv(process.env.MAX_FETCH_SIZE, 10485760, 1024, 104857600),    // 1KB ~ 100MB
+    fetchTimeout: parseIntEnv(process.env.FETCH_TIMEOUT, 30000, 5000, 120000),           // 5秒 ~ 2分钟
+    enableBrowser: parseBoolEnv(process.env.MIMO_ENABLE_BROWSER, false),                  // 浏览器渲染（SPA 降级）
   };
 }
