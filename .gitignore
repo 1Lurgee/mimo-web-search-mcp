@@ -63,3 +63,50 @@ Thumbs.db
 
 # OpenSpec local config
 openspec/
+
+# npm auth token (sensitive)
+.npmrc
+
+# Internal documentation (not for public release)
+CHANGELOG_GROK_BUILD.md
+INTERNAL*.md
+PRIVATE*.md
+
+# Sensitive configuration
+*.key
+*.pem
+*.p12
+*.pfx
+secrets.json
+credentials.json
+auth.json
+
+# Development tools
+.cursor/
+.cursorrules
+.windsurfrules
+.clinerules
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.tsbuildinfo
+dist/
+build/
+out/
+
+# Package manager artifacts
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Editor-specific files
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
