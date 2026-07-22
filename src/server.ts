@@ -9,6 +9,7 @@ import { executeSearch } from "./search.js";
 import { executeFetch } from "./fetch-tool.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { globalFetchCache } from "./cache.js";
+import { createProgressReporter } from "./progress.js";
 
 /** 创建并配置 MCP Server（注册所有工具） */
 export function createServer(): McpServer {
@@ -54,11 +55,12 @@ export function createServer(): McpServer {
     toolAnnotations,
     async (
       { query, max_keyword, limit, force_search, country, region, city, allowed_domains },
-      { signal },
+      { signal, _meta, sendNotification },
     ): Promise<CallToolResult> => {
       const reqId = randomUUID().slice(0, 8);
+      const reporter = createProgressReporter(sendNotification, _meta?.progressToken);
       return limitConcurrency(() =>
-        executeSearch({ query, max_keyword, limit, force_search, country, region, city, allowed_domains }, signal, reqId),
+        executeSearch({ query, max_keyword, limit, force_search, country, region, city, allowed_domains }, signal, reqId, reporter),
       );
     },
   );
@@ -91,11 +93,12 @@ export function createServer(): McpServer {
     toolAnnotations,
     async (
       { url, prompt, clean, max_length },
-      { signal },
+      { signal, _meta, sendNotification },
     ): Promise<CallToolResult> => {
       const reqId = randomUUID().slice(0, 8);
+      const reporter = createProgressReporter(sendNotification, _meta?.progressToken);
       return limitConcurrency(() =>
-        executeFetch({ url, prompt, clean, maxLength: max_length }, signal, reqId),
+        executeFetch({ url, prompt, clean, maxLength: max_length }, signal, reqId, reporter),
       );
     },
   );

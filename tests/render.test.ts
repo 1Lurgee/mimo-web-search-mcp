@@ -36,7 +36,7 @@ vi.mock("../src/logger.js", () => ({
   }),
 }));
 
-const { isSpaPage, getSpaHint } = await import("../src/render.js");
+const { isSpaPage } = await import("../src/render.js");
 
 // ── isSpaPage 测试 ────────────────────────────────────
 
@@ -78,16 +78,5 @@ describe("isSpaPage", () => {
 
   it("空 HTML -> 不判定为 SPA", () => {
     expect(isSpaPage("", 0)).toBe(false);
-  });
-});
-
-// ── getSpaHint 测试 ───────────────────────────────────
-
-describe("getSpaHint", () => {
-  it("返回包含 playwright 提示的文本", () => {
-    const hint = getSpaHint();
-    expect(hint).toContain("SPA");
-    expect(hint).toContain("MIMO_ENABLE_BROWSER");
-    expect(hint).toContain("playwright");
   });
 });

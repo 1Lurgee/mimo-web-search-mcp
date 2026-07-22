@@ -1,15 +1,67 @@
 /** 网页抓取模块 - HTTP fetch 用于获取网页内容 */
 
+import os from "node:os";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { validateUrl, resolveAndCheckHost } from "./ssrf.js";
-import { mergeAbortSignals } from "./util.js";
+import { validateUrl, isPermittedRedirect } from "./ssrf.js";
+import { mergeAbortSignals, TIMEOUT_REASON } from "./util.js";
 import { globalFetchCache } from "./cache.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
 const config = loadConfig();
 const logger = createLogger(config);
+
+// ── 动态 User-Agent（防止 WAF 拦截）──────────────────
+
+/**
+ * 按 OS 分组的真实浏览器 UA 池
+ * 每个 UA 都是真实存在的浏览器指纹，版本号固定（过时后手动更新）
+ */
+const UA_POOLS: Record<string, string[]> = {
+  win32: [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  ],
+  darwin: [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+  ],
+  linux: [
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  ],
+};
+
+/**
+ * 获取随机 User-Agent（会话级单例）
+ * 根据真实 OS 环境从对应 UA 池中随机选取一个，整个 MCP 生命周期复用
+ */
+let _cachedUA: string | null = null;
+function getUserAgent(): string {
+  if (_cachedUA) return _cachedUA;
+  const platform = os.platform();
+  const pool = UA_POOLS[platform] ?? UA_POOLS["win32"];
+  _cachedUA = pool[Math.floor(Math.random() * pool.length)];
+  return _cachedUA;
+}
+
+
+// ── In-flight 请求去重 ─────────────────────────────────
+// 防止 AI 并发触发对同一 URL 的多次抓取，复用进行中的 Promise
+const inflightRequests = new Map<string, Promise<FetchPageResult>>();
 
 // ── 类型定义 ──────────────────────────────────────────
 
@@ -63,14 +115,14 @@ function detectBom(buffer: ArrayBuffer): string | null {
   const bytes = new Uint8Array(buffer.slice(0, 4));
   // UTF-8 BOM: EF BB BF
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+  // UTF-32 LE BOM: FF FE 00 00（必须在 UTF-16 LE 之前检查，因为前缀相同）
+  if (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00) return "utf-32le";
+  // UTF-32 BE BOM: 00 00 FE FF（必须在 UTF-16 BE 之前检查，因为后缀相同）
+  if (bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff) return "utf-32be";
   // UTF-16 LE BOM: FF FE
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
   // UTF-16 BE BOM: FE FF
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-  // UTF-32 LE BOM: FF FE 00 00
-  if (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00) return "utf-32le";
-  // UTF-32 BE BOM: 00 00 FE FF
-  if (bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff) return "utf-32be";
   return null;
 }
 
@@ -141,8 +193,28 @@ export function hasGbkSupport(): boolean {
 
 // ── HTTP 请求（mergeAbortSignals 已迁移至 ./util.ts）──
 
-/** 最大重定向次数，防止无限重定向循环 */
-const MAX_REDIRECTS = 5;
+/** 最大重定向次数，防止无限重定向循环（对齐 Claude Code，匹配常见客户端默认值） */
+const MAX_REDIRECTS = 10;
+
+/**
+ * 检测是否为二进制内容类型（对齐 Claude Code 白名单策略）
+ *
+ * 采用白名单而非黑名单：默认认为所有类型都是二进制的，只排除已知的文本类型。
+ * 黑名单策略的问题：永远无法穷举所有二进制类型（application/wasm、font/woff 等），
+ * 未知类型会被当文本解码产生乱码并浪费 token。
+ *
+ * 先用 split(';')[0] 剥离 charset 等参数，只比较主 MIME 类型。
+ */
+function isBinaryContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const mt = (contentType.split(";")[0] ?? "").trim().toLowerCase();
+  if (mt.startsWith("text/")) return false;
+  if (mt.endsWith("+json") || mt === "application/json") return false;
+  if (mt.endsWith("+xml") || mt === "application/xml") return false;
+  if (mt.startsWith("application/javascript")) return false;
+  if (mt === "application/x-www-form-urlencoded") return false;
+  return true;
+}
 
 /**
  * 流式读取响应体，限制最大字节数以防止 OOM
@@ -221,41 +293,40 @@ async function fetchPageInternal(
     };
   }
 
-  // DNS rebinding 防护：解析域名并复核所有解析 IP 是否为内网
-  const dnsError = await resolveAndCheckHost(url);
-  if (dnsError) {
-    return {
-      url,
-      status: 0,
-      contentType: null,
-      size: 0,
-      content: "",
-      error: dnsError,
-    };
+  // HTTP → HTTPS 自动升级（借鉴 Claude Code 设计）
+  // 安全收益：防止明文传输；如果 HTTPS 失败，外层 catch 不会 fallback（本地内网场景少见）
+  let upgradedUrl = url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:") {
+      parsed.protocol = "https:";
+      upgradedUrl = parsed.toString();
+      log.info(`HTTP 自动升级为 HTTPS: ${url} -> ${upgradedUrl}`);
+    }
+  } catch {
+    // URL 已通过 validateUrl 校验，不会到这里
   }
 
   // 超时控制：创建内部 AbortController，与外部信号合并
   const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => timeoutController.abort("fetch_timeout"), timeout);
+  const timeoutId = setTimeout(() => timeoutController.abort(TIMEOUT_REASON), timeout);
 
   const combinedSignal = signal
     ? mergeAbortSignals(signal, timeoutController.signal)
     : timeoutController.signal;
 
   try {
-    log.info(`抓取网页: ${url}`);
+    log.info(`抓取网页: ${upgradedUrl}`);
 
-    const resp = await fetch(url, {
+    const resp = await fetch(upgradedUrl, {
       method: "GET",
       headers: {
-        // 模拟浏览器 User-Agent，避免被网站拒绝
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "User-Agent": getUserAgent(),
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
       },
       signal: combinedSignal,
-      // 不自动跟随重定向，手动处理以确保重定向目标也通过 SSRF 检查
+      // 不自动跟随重定向，手动处理以确保重定向目标也通过安全检查
       redirect: "manual",
     });
 
@@ -285,9 +356,11 @@ async function fetchPageInternal(
       }
 
       // 解析重定向 URL（支持相对路径）
+      // 必须使用 upgradedUrl 作为 base，否则 HTTP→HTTPS 升级后的相对重定向
+      // 会解析为 http:// 而非 https://，导致 isPermittedRedirect 误判协议不一致
       let redirectUrl: string;
       try {
-        redirectUrl = new URL(location, url).toString();
+        redirectUrl = new URL(location, upgradedUrl).toString();
       } catch {
         return {
           url,
@@ -299,7 +372,21 @@ async function fetchPageInternal(
         };
       }
 
-      log.info(`重定向: ${url} -> ${redirectUrl}`);
+      // 安全检查：重定向必须满足 isPermittedRedirect 的 4 项条件（对齐 Claude Code 设计）
+      // 防止开放重定向攻击——恶意服务器通过 302 将请求导向内网或钓鱼站点
+      if (!isPermittedRedirect(upgradedUrl, redirectUrl)) {
+        log.info(`不安全重定向，返回信息让调用方决定: ${upgradedUrl} -> ${redirectUrl}`);
+        return {
+          url: upgradedUrl,
+          status: resp.status,
+          contentType: null,
+          size: 0,
+          content: "",
+          error: `不安全重定向: ${upgradedUrl} -> ${redirectUrl}（状态码 ${resp.status}）。原因：协议/端口/主机名不一致或携带凭证。如需跟随，请直接请求目标 URL。`,
+        };
+      }
+
+      log.info(`同域重定向: ${upgradedUrl} -> ${redirectUrl}`);
 
       // 递归跟随重定向，重定向计数 +1
       return fetchPageInternal(redirectUrl, options, redirectCount + 1);
@@ -310,7 +397,7 @@ async function fetchPageInternal(
       // 消耗响应体防止连接泄漏
       await resp.text().catch(() => "");
       return {
-        url: resp.url || url,
+        url: resp.url || upgradedUrl,
         status: resp.status,
         contentType: resp.headers.get("content-type"),
         size: 0,
@@ -320,38 +407,41 @@ async function fetchPageInternal(
     }
 
     // 响应体大小防护（两层）：Content-Length 预检 + 流式限流读
+    // 优先于二进制检测——Content-Length 是纯 header 检查，比 body 读取更便宜
+    const contentTypeHeader = resp.headers.get("content-type");
     const contentLength = Number(resp.headers.get("content-length") ?? 0);
     if (contentLength && contentLength > maxSize) {
       log.warn(`Content-Length 超限: ${contentLength} 字节（限制 ${maxSize} 字节）`);
       await resp.body?.cancel().catch(() => "");
       return {
-        url: resp.url || url,
+        url: resp.url || upgradedUrl,
         status: resp.status,
-        contentType: resp.headers.get("content-type"),
+        contentType: contentTypeHeader,
         size: contentLength,
         content: "",
         error: `响应体过大: ${(contentLength / 1024 / 1024).toFixed(1)}MB（限制 ${(maxSize / 1024 / 1024).toFixed(1)}MB）`,
       };
     }
 
-    // 流式限流读：按块累积，达到 maxSize+1 即提前终止，避免 OOM
-    const arrayBuffer = await streamToLimitedBuffer(resp.body, maxSize, combinedSignal);
-    const size = arrayBuffer.byteLength;
-
-    if (size > maxSize) {
-      log.warn(`流式读取超限: ${size} 字节（限制 ${maxSize} 字节）`);
+    // 二进制内容检测（借鉴 Claude Code 设计）
+    // PDF/图片/视频等二进制内容无法当文本处理，返回友好提示而非乱码
+    if (isBinaryContentType(contentTypeHeader)) {
+      await resp.body?.cancel().catch(() => "");
       return {
-        url: resp.url || url,
+        url: resp.url || upgradedUrl,
         status: resp.status,
-        contentType: resp.headers.get("content-type"),
-        size,
+        contentType: contentTypeHeader,
+        size: contentLength,
         content: "",
-        error: `响应体过大: ${(size / 1024 / 1024).toFixed(1)}MB（限制 ${(maxSize / 1024 / 1024).toFixed(1)}MB）`,
+        error: `不支持的内容类型: ${contentTypeHeader}（二进制内容无法作为文本处理）`,
       };
     }
 
+    // 流式限流读：按块累积，达到 maxSize 即提前终止，避免 OOM
+    const arrayBuffer = await streamToLimitedBuffer(resp.body, maxSize, combinedSignal);
+    const size = arrayBuffer.byteLength;
+
     // 检测字符编码并解码内容
-    const contentTypeHeader = resp.headers.get("content-type");
     const charset = detectCharset(arrayBuffer, contentTypeHeader);
 
     let content: string;
@@ -371,10 +461,10 @@ async function fetchPageInternal(
       content = new TextDecoder("utf-8").decode(arrayBuffer);
     }
 
-    log.info(`抓取完成: ${resp.url || url} (${resp.status}, ${size} 字节, 编码: ${charset})`);
+    log.info(`抓取完成: ${resp.url || upgradedUrl} (${resp.status}, ${size} 字节, 编码: ${charset})`);
 
     return {
-      url: resp.url || url,
+      url: resp.url || upgradedUrl,
       status: resp.status,
       contentType: contentTypeHeader,
       size,
@@ -386,7 +476,7 @@ async function fetchPageInternal(
     // AbortError 区分超时和外部取消
     if (error.name === "AbortError") {
       const cause = "cause" in error ? (error as { cause: unknown }).cause : undefined;
-      const isTimeout = cause === "fetch_timeout";
+      const isTimeout = cause === TIMEOUT_REASON;
       return {
         url,
         status: 0,
@@ -464,13 +554,27 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
     return cached;
   }
 
-  // 执行抓取
-  const result = await fetchPageInternal(url, options, 0);
-
-  // 成功结果存入缓存（错误不缓存）
-  if (!result.error) {
-    globalFetchCache.set(url, result);
+  // 检查是否有相同 URL 的进行中请求（去重）
+  const inflight = inflightRequests.get(url);
+  if (inflight) {
+    logger.debug(`复用进行中的请求: ${url}`);
+    return inflight;
   }
 
-  return result;
+  // 执行抓取，注册到 inflight map
+  const promise = fetchPageInternal(url, options, 0);
+  inflightRequests.set(url, promise);
+
+  try {
+    const result = await promise;
+
+    // 成功结果存入缓存（错误不缓存）
+    if (!result.error) {
+      globalFetchCache.set(url, result);
+    }
+
+    return result;
+  } finally {
+    inflightRequests.delete(url);
+  }
 }

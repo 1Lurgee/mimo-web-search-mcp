@@ -91,7 +91,7 @@ describe("loadConfig", () => {
     const config = await loadConfig();
     expect(config.apiKey).toBe("test-key");
     expect(config.baseUrl).toBe("https://api.xiaomimimo.com/v1");
-    expect(config.model).toBe("mimo-v2.5-pro");
+    expect(config.model).toBe("mimo-v2.5");
     expect(config.requestTimeout).toBe(60000);
     expect(config.maxCompletionTokens).toBe(1024);
     expect(config.temperature).toBe(0.3);

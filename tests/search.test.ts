@@ -227,7 +227,7 @@ describe("mimo_web_search 工具", () => {
     expect(options.headers["api-key"]).toBe("test-api-key");
 
     const body = JSON.parse(options.body);
-    expect(body.model).toBe("mimo-v2.5-pro");
+    expect(body.model).toBe("mimo-v2.5");
     expect(body.messages[0].content).toBe("搜索词");
     expect(body.tools[0].type).toBe("web_search");
     expect(body.tools[0].max_keyword).toBe(5);
@@ -520,7 +520,7 @@ describe("mimo_web_search 工具", () => {
     })) as { isError: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Network error");
+    expect(result.content[0].text).toContain("网络错误");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -535,7 +535,7 @@ describe("mimo_web_search 工具", () => {
     })) as { isError: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Network error");
+    expect(result.content[0].text).toContain("网络错误");
   });
 
   // ── 响应格式异常 ─────────────────────────────────

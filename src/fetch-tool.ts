@@ -8,10 +8,11 @@ import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { MimoResponseSchema, type FetchParams } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { fetchWithTimeout, TIMEOUT_REASON } from "./util.js";
+import { fetchWithTimeout, truncateMarkdown, TIMEOUT_REASON } from "./util.js";
 import { isSpaPage, renderWithBrowser, getSpaHint } from "./render.js";
 import { handleOverflow } from "./overflow.js";
 import { emit401 } from "./attribution.js";
+import type { ProgressReporter } from "./progress.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -162,6 +163,7 @@ export async function executeFetch(
   params: FetchParams,
   signal?: AbortSignal,
   reqId: string = randomUUID(),
+  reporter?: ProgressReporter,
 ): Promise<CallToolResult> {
   const log = logger.withReqId(reqId);
   const { url, prompt, clean, maxLength } = params;
@@ -177,6 +179,7 @@ export async function executeFetch(
 
   // ── 2. 抓取网页 ──
   log.info(`开始抓取: ${url}`);
+  await reporter?.report(0, "正在抓取网页...");
   const result = await fetchPage(url, { signal });
 
   if (result.error) {
@@ -188,6 +191,7 @@ export async function executeFetch(
   }
 
   log.info(`抓取成功: ${result.status}, ${result.size} 字节, Content-Type: ${result.contentType}`);
+  await reporter?.report(16, "抓取成功，正在转换...");
 
   // ── 3. 非 HTML 内容 -> 直接返回原始文本 ──
   const isHtml = result.contentType?.includes("html") ?? false;
@@ -202,12 +206,14 @@ export async function executeFetch(
 
   // ── 4. HTML -> Markdown ──
   log.info("开始 HTML 转 Markdown...");
+  await reporter?.report(33, "正在提取正文...");
   let markdown = htmlToMarkdown(result.content, { clean, maxLength });
   log.info(`Markdown 转换完成，长度: ${markdown.length}`);
 
   // ── 4.1 SPA 降级检测 ──
   if (clean && isSpaPage(result.content, markdown.length)) {
     log.info("检测到疑似 SPA 页面");
+    await reporter?.report(50, "检测到 SPA，正在渲染...");
     if (config.enableBrowser) {
       log.info("启用浏览器渲染降级...");
       const rendered = await renderWithBrowser(url);
@@ -228,8 +234,47 @@ export async function executeFetch(
   // ── 5. 无 prompt -> 返回 Markdown ──
   if (!prompt) {
     const metadata = formatMetadataHeader(result.url, result.status, result.contentType, result.size, false);
-    // 使用溢出处理，支持大文件保存到磁盘
+
+    // 内容在限制内，直接返回
+    if (markdown.length <= maxLength) {
+      return {
+        content: [{ type: "text", text: metadata + markdown }],
+      };
+    }
+
+    // 内容超长 + 自动摘要已启用 -> 调用 MiMo API 摘要（对齐 Claude Code Haiku 摘要设计）
+    if (config.autoSummary) {
+      log.info(`内容超长（${markdown.length} > ${maxLength}），启用自动摘要...`);
+      await reporter?.report(83, "内容超长，正在自动摘要...");
+      const summaryPrompt = "请对以下网页内容进行简洁的摘要，保留关键信息、代码示例和文档要点。";
+      // 截断到安全上限再发给模型（对齐 Claude Code 的 MAX_MARKDOWN_LENGTH = 100K）
+      // 防止 maxLength 配置过大时超出模型 context window
+      // 使用语义边界截断，避免在段落/句子中间切断
+      const SUMMARY_INPUT_LIMIT = 100_000;
+      const contentForSummary = truncateMarkdown(markdown, SUMMARY_INPUT_LIMIT);
+      const aiResult = await callMimoApi(contentForSummary, summaryPrompt, signal, reqId);
+
+      if (aiResult.success) {
+        log.info(`自动摘要完成，长度: ${aiResult.content.length}`);
+        const summaryMetadata = formatMetadataHeader(result.url, result.status, result.contentType, result.size, true);
+        await reporter?.report(100, "完成");
+        return {
+          content: [{ type: "text", text: summaryMetadata + aiResult.content }],
+        };
+      }
+
+      // 摘要失败 -> fallback 到硬截断 + 附加警告
+      log.warn(`自动摘要失败: ${aiResult.error}，回退到硬截断`);
+      const overflow = await handleOverflow(markdown, maxLength);
+      await reporter?.report(100, "完成（摘要失败，已截断）");
+      return {
+        content: [{ type: "text", text: metadata + overflow.content + `\n\n[注意：自动摘要失败（${aiResult.error}），内容已截断]` }],
+      };
+    }
+
+    // 自动摘要未启用 -> 硬截断
     const overflow = await handleOverflow(markdown, maxLength);
+    await reporter?.report(100, "完成");
     return {
       content: [{ type: "text", text: metadata + overflow.content }],
     };
@@ -237,13 +282,15 @@ export async function executeFetch(
 
   // ── 6. 有 prompt -> 调用 MiMo API ──
   log.info(`开始 AI 分析，prompt: ${prompt.substring(0, 50)}...`);
+  await reporter?.report(83, "正在 AI 分析...");
   const aiResult = await callMimoApi(markdown, prompt, signal, reqId);
 
   if (!aiResult.success) {
-    // AI 分析失败 -> 返回错误 + 原始 Markdown 作为 fallback
+    // AI 分析失败 -> 返回错误 + 原始 Markdown 作为 fallback（经过 overflow 保护）
     log.warn(`AI 分析失败: ${aiResult.error}，返回原始 Markdown`);
     const metadata = formatMetadataHeader(result.url, result.status, result.contentType, result.size, false);
-    const fallbackText = `${metadata}**AI 分析失败: ${aiResult.error}**\n\n以下是原始网页内容：\n\n${markdown}`;
+    const overflow = await handleOverflow(markdown, maxLength);
+    const fallbackText = `${metadata}**AI 分析失败: ${aiResult.error}**\n\n以下是原始网页内容：\n\n${overflow.content}`;
     return {
       content: [{ type: "text", text: fallbackText }],
       isError: true,
@@ -252,6 +299,7 @@ export async function executeFetch(
 
   // AI 分析成功 -> 返回分析结果
   const metadata = formatMetadataHeader(result.url, result.status, result.contentType, result.size, true);
+  await reporter?.report(100, "完成");
   return {
     content: [{ type: "text", text: metadata + aiResult.content }],
   };

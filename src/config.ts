@@ -48,6 +48,8 @@ export interface AppConfig {
   fetchTimeout: number;
   /** 启用浏览器渲染（SPA 降级，需先安装 playwright） */
   enableBrowser: boolean;
+  /** 超长内容无 prompt 时是否自动调用 MiMo API 摘要（默认 true） */
+  autoSummary: boolean;
 }
 
 /**
@@ -86,10 +88,11 @@ function parseBoolEnv(value: string | undefined, defaultValue: boolean): boolean
 
 
 /**
- * 验证 URL 格式，限制为 HTTPS 协议
+ * 验证 API 基础 URL 格式，限制为 HTTPS 协议
  * 防止 SSRF 攻击：禁止 file://、ftp:// 等非 HTTP(S) 协议
+ * 注意：与 ssrf.ts 的 validateUrl（允许 http/https）语义不同——此处仅用于校验 MIMO_BASE_URL
  */
-function validateUrl(url: string): boolean {
+function validateApiUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     return parsed.protocol === "https:";
@@ -110,15 +113,23 @@ export function getRedactedConfig(config: AppConfig): Partial<AppConfig> {
   };
 }
 
-/** 加载并验证配置 */
-export function loadConfig(): AppConfig {
+// ── 单例缓存 ─────────────────────────────────────────
+// 首次调用解析并缓存，后续直接返回同一实例。
+// 避免 10+ 个模块各自 loadConfig() 创建独立副本，也避免缺少 MIMO_API_KEY 时
+// 每个模块 import 阶段都抛一遍异常。
+let _cachedConfig: Readonly<AppConfig> | null = null;
+
+/** 加载并验证配置（单例：首次调用后缓存结果） */
+export function loadConfig(): Readonly<AppConfig> {
+  if (_cachedConfig) return _cachedConfig;
+
   const apiKey = process.env.MIMO_API_KEY;
   if (!apiKey) {
     throw new Error("MIMO_API_KEY environment variable is required.");
   }
 
   const baseUrl = (process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1").replace(/\/+$/, "");
-  if (!validateUrl(baseUrl)) {
+  if (!validateApiUrl(baseUrl)) {
     throw new Error(`Invalid MIMO_BASE_URL format: ${baseUrl}`);
   }
 
@@ -135,10 +146,10 @@ export function loadConfig(): AppConfig {
     logLevel = LogLevel.ERROR;
   }
 
-  return {
+  _cachedConfig = Object.freeze({
     apiKey,
     baseUrl,
-    model: process.env.MIMO_MODEL || "mimo-v2.5-pro",
+    model: process.env.MIMO_MODEL || "mimo-v2.5",
     requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000, 1000, 300000),      // 1秒 ~ 5分钟
     maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 1024, 1, 100000),
     temperature: parseFloatEnv(process.env.TEMPERATURE, 0.3, 0, 1.5),
@@ -152,8 +163,10 @@ export function loadConfig(): AppConfig {
     defaultMaxKeyword: parseIntEnv(process.env.DEFAULT_MAX_KEYWORD, 3, 1, 50),            // 1 ~ 50
     defaultLimit: parseIntEnv(process.env.DEFAULT_LIMIT, 5, 1, 50),                       // 1 ~ 50
     maxQueryLength: parseIntEnv(process.env.MAX_QUERY_LENGTH, 10000, 100, 100000),        // 100 ~ 100K 字符
-    maxFetchSize: parseIntEnv(process.env.MAX_FETCH_SIZE, 10485760, 1024, 104857600),    // 1KB ~ 100MB
+    maxFetchSize: parseIntEnv(process.env.MAX_FETCH_SIZE, 10485760, 1024, 10485760),     // 1KB ~ 10MB（对齐 Claude Code MAX_HTTP_CONTENT_LENGTH）
     fetchTimeout: parseIntEnv(process.env.FETCH_TIMEOUT, 30000, 5000, 120000),           // 5秒 ~ 2分钟
     enableBrowser: parseBoolEnv(process.env.MIMO_ENABLE_BROWSER, false),                  // 浏览器渲染（SPA 降级）
-  };
+    autoSummary: parseBoolEnv(process.env.MIMO_AUTO_SUMMARY, true),                      // 超长内容自动摘要
+  });
+  return _cachedConfig;
 }
