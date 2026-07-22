@@ -26,6 +26,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.13",
+    "lru-cache": "^11.5.2",
     "p-limit": "^7.3.0",
     "turndown": "^7.2.4",
     "zod": "^3.22.0"

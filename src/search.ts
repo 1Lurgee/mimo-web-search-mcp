@@ -11,8 +11,9 @@ import {
   type WebSearchToolConfig,
 } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { calculateRetryDelay, fetchWithTimeout, TIMEOUT_REASON } from "./util.js";
+import { calculateRetryDelay, fetchWithTimeout, truncateMarkdown, TIMEOUT_REASON } from "./util.js";
 import { emit401 } from "./attribution.js";
+import type { ProgressReporter } from "./progress.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -42,39 +43,6 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
-/**
- * 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构
- * 特别处理 Markdown 链接：避免在 ]( 中间截断导致语法损坏
- */
-export function truncateContent(text: string, maxContentLength: number): string {
-  if (text.length <= maxContentLength) return text;
-
-  const truncated = text.substring(0, maxContentLength);
-  const truncationNotice = "\n\n[Content truncated due to size limit...]";
-
-  // 依次尝试按段落、换行、句号截断，保留最完整的语义单元
-  const boundaries = ["\n\n", "\n", ". "];
-  let cutPoint = -1;
-  for (const boundary of boundaries) {
-    const idx = truncated.lastIndexOf(boundary);
-    if (idx > maxContentLength / 2) {
-      cutPoint = idx + boundary.length;
-      break;
-    }
-  }
-
-  // 无合适边界，硬截断
-  const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
-
-  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
-  // ]( 没有对应的 ]  → 说明链接被截断了，移除悬挂的 [
-  if (!base.includes("](")) {
-    return base.replace(/\[[^\]]*$/, "") + truncationNotice;
-  }
-
-  return base + truncationNotice;
-}
-
 /** 延迟指定毫秒 */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -90,16 +58,17 @@ function delay(ms: number): Promise<void> {
  * 借鉴 grok-build 设计：
  * - 引用去重（同一 URL 只显示一次）
  * - 保持首次出现顺序
+ * - 支持 allowed_domains 域名白名单过滤（借鉴 Claude Code WebSearchTool 设计）
  *
  * @returns 格式化后的文本，或 null 表示响应无效（choices 为空或 message 缺失）
  */
-function formatResult(data: MimoResponse): string | null {
+function formatResult(data: MimoResponse, allowedDomains?: string[]): string | null {
   // 安全访问：choices 和 message 都可能为 undefined
   const message = data.choices?.[0]?.message;
   if (!message) return null;
 
   // 先截断 content，再拼接 sources，确保引用来源不被截断
-  let result = truncateContent(message.content || "(no content)", config.maxContentLength);
+  let result = truncateMarkdown(message.content || "(no content)", config.maxContentLength);
 
   // 添加引用来源（借鉴 grok-build 去重逻辑）
   const annotations = message.annotations || [];
@@ -113,9 +82,25 @@ function formatResult(data: MimoResponse): string | null {
       return true;
     });
 
-    if (uniqueAnnotations.length > 0) {
+    // 域名白名单过滤（借鉴 Claude Code WebSearchTool 的 allowed_domains 设计）
+    const filteredAnnotations =
+      allowedDomains && allowedDomains.length > 0
+        ? uniqueAnnotations.filter((a) => {
+            if (!a.url) return false;
+            try {
+              const hostname = new URL(a.url).hostname;
+              return allowedDomains.some(
+                (domain) => hostname === domain || hostname.endsWith("." + domain),
+              );
+            } catch {
+              return false;
+            }
+          })
+        : uniqueAnnotations;
+
+    if (filteredAnnotations.length > 0) {
       result += "\n\n--- Sources ---";
-      for (const a of uniqueAnnotations) {
+      for (const a of filteredAnnotations) {
         const title = a.title || "untitled";
         const siteName = a.site_name || "unknown";
         const url = a.url || "#";
@@ -181,6 +166,7 @@ export async function executeSearch(
   params: SearchParams,
   signal?: AbortSignal,
   reqId: string = randomUUID(),
+  reporter?: ProgressReporter,
 ): Promise<CallToolResult> {
   const log = logger.withReqId(reqId);
   const { query, max_keyword, limit, force_search, country, region, city, allowed_domains } = params;
@@ -202,12 +188,10 @@ export async function executeSearch(
     };
   }
 
-  // 域名白名单过滤（借鉴 grok-build 设计）
-  // 用于限制搜索结果仅来自指定域名，提高技术文档搜索相关性
+  // 域名白名单过滤（借鉴 Claude Code WebSearchTool 设计）
+  // MiMo API 不直接支持此参数，所以在结果层面做客户端后过滤
   if (allowed_domains && allowed_domains.length > 0) {
-    log.info(`域名白名单: ${allowed_domains.join(", ")}`);
-    // 注意：MiMo API 可能不直接支持此参数，这里记录日志供调试
-    // 实际过滤可能需要在结果层面实现
+    log.info(`域名白名单（客户端过滤）: ${allowed_domains.join(", ")}`);
   }
 
   const body: MimoRequestBody = {
@@ -230,6 +214,7 @@ export async function executeSearch(
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
       log.info(`Sending request (attempt ${attempt + 1}/${config.maxRetries + 1}): ${query.substring(0, 50)}...`);
+      await reporter?.report(0, "正在发起搜索...");
 
       const resp = await fetchWithTimeout(
         `${config.baseUrl}/chat/completions`,
@@ -246,6 +231,7 @@ export async function executeSearch(
       );
 
       log.info(`Response status: ${resp.status}`);
+      await reporter?.report(25, "已收到响应，正在解析...");
 
       if (!resp.ok) {
         await resp.text().catch(() => ""); // 消耗响应体
@@ -283,7 +269,7 @@ export async function executeSearch(
         };
       }
 
-      const resultText = formatResult(data);
+      const resultText = formatResult(data, allowed_domains);
       if (resultText === null) {
         return {
           content: [{ type: "text", text: "Empty response from MiMo API." }],
@@ -291,6 +277,8 @@ export async function executeSearch(
         };
       }
       log.info(`Response parsed. Content length: ${resultText.length}`);
+      await reporter?.report(75, "正在格式化结果...");
+      await reporter?.report(100, "搜索完成");
       return { content: [{ type: "text", text: resultText }] };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -330,11 +318,13 @@ export async function executeSearch(
         continue;
       }
 
+      // 原始 error.message 仅进日志，不暴露给 LLM（防止泄漏内部 IP、DNS 细节等）
+      log.error(`网络错误: ${error.message}`);
       return {
         content: [
           {
             type: "text",
-            text: `Network error: ${error.message}. Please check your internet connection and try again.`,
+            text: "网络错误，请检查网络连接后重试。",
           },
         ],
         isError: true,

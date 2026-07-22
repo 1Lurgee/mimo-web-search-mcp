@@ -1,4 +1,4 @@
-/** 共用工具函数 - 消除 search.ts / fetch.ts / fetch-tool.ts 间的重复代码 */
+/** 共用工具函数 - 消除 search.ts / fetch.ts / fetch-tool.ts / convert.ts / overflow.ts 间的重复代码 */
 
 import { loadConfig } from "./config.js";
 
@@ -65,4 +65,49 @@ export async function fetchWithTimeout(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+// ── 内容截断工具 ──────────────────────────────────────
+
+/**
+ * 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构
+ * 特别处理 Markdown 链接：避免在 [text 中间截断导致语法损坏
+ *
+ * 被 convert.ts、overflow.ts、search.ts、fetch-tool.ts 共用，
+ * 消除原先四处重复的截断逻辑。
+ *
+ * @param text - 原始文本
+ * @param maxLength - 最大字符数
+ * @returns 截断后的文本（含截断通知），或原文（未超长时）
+ */
+export function truncateMarkdown(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+
+  const truncated = text.substring(0, maxLength);
+  const truncationNotice = "\n\n[Content truncated due to size limit...]";
+
+  // 依次尝试按段落、换行、句号截断，保留最完整的语义单元
+  const boundaries = ["\n\n", "\n", ". "];
+  let cutPoint = -1;
+  for (const boundary of boundaries) {
+    const idx = truncated.lastIndexOf(boundary);
+    if (idx > maxLength / 2) {
+      cutPoint = idx + boundary.length;
+      break;
+    }
+  }
+
+  // 无合适边界，硬截断
+  const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
+
+  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
+  // 始终检查末尾是否有未闭合的 [（即使文本中包含其他完整链接）
+  const lastOpen = base.lastIndexOf("[");
+  const lastClose = base.lastIndexOf("]");
+  if (lastOpen > lastClose) {
+    // 最后一个 [ 没有对应的 ]，说明被截断了，移除该 [ 及其后的内容
+    return base.substring(0, lastOpen).trimEnd() + truncationNotice;
+  }
+
+  return base + truncationNotice;
 }

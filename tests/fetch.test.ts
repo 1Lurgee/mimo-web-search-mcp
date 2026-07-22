@@ -82,8 +82,23 @@ vi.mock("../src/ssrf.js", () => {
     return { valid: true };
   }
 
+  function isPermittedRedirect(originalUrl: string, redirectUrl: string): boolean {
+    try {
+      const parsedOriginal = new URL(originalUrl);
+      const parsedRedirect = new URL(redirectUrl);
+      if (parsedRedirect.protocol !== parsedOriginal.protocol) return false;
+      if (parsedRedirect.port !== parsedOriginal.port) return false;
+      if (parsedRedirect.username || parsedRedirect.password) return false;
+      const stripWww = (hostname: string) => hostname.replace(/^www\./, "");
+      return stripWww(parsedOriginal.hostname) === stripWww(parsedRedirect.hostname);
+    } catch {
+      return false;
+    }
+  }
+
   return {
     validateUrl,
+    isPermittedRedirect,
     resolveAndCheckHost: async () => null, // 跳过 DNS 复查
     isPrivateIPv4,
     isPrivateIPv6,
@@ -532,8 +547,8 @@ describe("fetchPage", () => {
       "fetch",
       vi.fn().mockImplementation(async () => {
         const err = new DOMException("The operation was aborted.", "AbortError");
-        // 设置 cause 为 fetch_timeout 以标识超时
-        Object.defineProperty(err, "cause", { value: "fetch_timeout" });
+        // 设置 cause 为 request_timeout 以标识超时（与 util.ts TIMEOUT_REASON 一致）
+        Object.defineProperty(err, "cause", { value: "request_timeout" });
         throw err;
       }),
     );
@@ -625,14 +640,14 @@ describe("fetchPage", () => {
     expect(result.error).toContain("重定向次数超过限制");
   });
 
-  it("重定向目标为私有地址 -> 返回验证错误", async () => {
+  it("重定向目标为私有地址 -> 被安全重定向检查拦截", async () => {
     let callCount = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => {
         callCount++;
         if (callCount === 1) {
-          // 第一次请求返回重定向到回环地址（可被正确检测）
+          // 第一次请求返回重定向到回环地址（被 isPermittedRedirect 拦截）
           return createMockResponse({
             ok: false,
             status: 301,
@@ -645,10 +660,58 @@ describe("fetchPage", () => {
 
     const result = await fetchPage("https://example.com/start");
 
-    // 重定向到私有地址应被拦截
-    expect(result.error).toContain("私有/保留地址");
-    // 只发起了第一次请求，第二次因 URL 验证失败而未调用 fetch
+    // 重定向到不同域名/协议（含私有地址）应被安全重定向检查拦截
+    expect(result.error).toContain("不安全重定向");
+    // 只发起了第一次请求，第二次因安全重定向检查而未调用 fetch
     expect(callCount).toBe(1);
+  });
+
+  it("HTTPS -> HTTP 重定向（协议降级）-> 被安全重定向检查拦截", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        createMockResponse({
+          ok: false,
+          status: 301,
+          headers: new Headers({ location: "http://example.com/insecure" }),
+        }),
+      ),
+    );
+
+    const result = await fetchPage("https://example.com/secure");
+
+    // HTTPS -> HTTP 是协议降级，应被 isPermittedRedirect 拦截
+    expect(result.error).toContain("不安全重定向");
+  });
+
+  it("同域 www 重定向 -> 允许跟随", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        callCount++;
+        if (url === "https://example.com/start") {
+          return createMockResponse({
+            ok: false,
+            status: 301,
+            headers: new Headers({ location: "https://www.example.com/page" }),
+          });
+        }
+        return createMockResponse({
+          ok: true,
+          status: 200,
+          url: "https://www.example.com/page",
+          bodyText: "<html><body>OK</body></html>",
+        });
+      }),
+    );
+
+    const result = await fetchPage("https://example.com/start");
+
+    // www 增减是允许的，应成功跟随重定向
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(callCount).toBe(2);
   });
 
   it("SSL 证书错误 -> 返回安全提示，不暴露原始证书细节", async () => {

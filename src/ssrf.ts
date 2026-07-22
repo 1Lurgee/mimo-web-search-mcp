@@ -47,10 +47,43 @@ export function validateUrl(url: string): { valid: boolean; error?: string } {
   return { valid: true };
 }
 
+// ── 重定向安全检查 ──────────────────────────────────────
+
 /**
- * 兼容旧代码的空实现
- * @deprecated 本地使用不需要 DNS rebinding 防护
+ * 检查重定向是否安全可跟随（对齐 Claude Code isPermittedRedirect 设计）
+ *
+ * 允许的重定向必须同时满足 4 个条件：
+ * 1. 协议一致（防止 HTTPS -> HTTP 降级）
+ * 2. 端口一致（防止端口扫描/内部服务访问）
+ * 3. 无凭证（防止 user:pass@ 信息泄漏）
+ * 4. 主机名一致（允许 www 前缀增减）
+ *
+ * 防止开放重定向攻击：恶意服务器通过 302 将请求导向内网或钓鱼站点
  */
-export async function resolveAndCheckHost(_url: string): Promise<string | null> {
-  return null;
+export function isPermittedRedirect(originalUrl: string, redirectUrl: string): boolean {
+  try {
+    const parsedOriginal = new URL(originalUrl);
+    const parsedRedirect = new URL(redirectUrl);
+
+    // 条件 1：协议必须一致（防止 TLS 降级）
+    if (parsedRedirect.protocol !== parsedOriginal.protocol) {
+      return false;
+    }
+
+    // 条件 2：端口必须一致（防止端口扫描）
+    if (parsedRedirect.port !== parsedOriginal.port) {
+      return false;
+    }
+
+    // 条件 3：重定向 URL 不能携带凭证（防止信息泄漏）
+    if (parsedRedirect.username || parsedRedirect.password) {
+      return false;
+    }
+
+    // 条件 4：主机名一致（允许 www 前缀增减）
+    const stripWww = (hostname: string) => hostname.replace(/^www\./, "");
+    return stripWww(parsedOriginal.hostname) === stripWww(parsedRedirect.hostname);
+  } catch {
+    return false;
+  }
 }

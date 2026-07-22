@@ -5,6 +5,7 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { truncateMarkdown } from "./util.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -111,13 +112,20 @@ export interface ConvertOptions {
 
 // ── Turndown 配置 ─────────────────────────────────────
 
-/** 创建预配置的 TurndownService 实例 */
-function createTurndownService(): TurndownService {
-  return new TurndownService({
-    headingStyle: "atx",
-    bulletListMarker: "-",
-    codeBlockStyle: "fenced",
-  });
+// 懒加载单例（对齐 Claude Code getTurndownService 模式）
+// 首次调用时创建，后续复用同一实例。TurndownService 的配置在运行期间不变，
+// .turndown() 方法是无状态的，可安全并发调用。
+let _turndownInstance: TurndownService | null = null;
+
+function getTurndownService(): TurndownService {
+  if (!_turndownInstance) {
+    _turndownInstance = new TurndownService({
+      headingStyle: "atx",
+      bulletListMarker: "-",
+      codeBlockStyle: "fenced",
+    });
+  }
+  return _turndownInstance;
 }
 
 // ── 内部工具函数 ──────────────────────────────────────
@@ -144,43 +152,10 @@ function removeNoiseElements(document: LinkedomDocument): void {
 }
 
 /**
- * 截断过长内容，按段落/换行/句子边界截断，避免破坏语义结构
- * 复用 search.ts 的 truncateContent 逻辑
- */
-function truncateMarkdown(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-
-  const truncated = text.substring(0, maxLength);
-  const truncationNotice = "\n\n[Content truncated due to size limit...]";
-
-  // 依次尝试按段落、换行、句号截断，保留最完整的语义单元
-  const boundaries = ["\n\n", "\n", ". "];
-  let cutPoint = -1;
-  for (const boundary of boundaries) {
-    const idx = truncated.lastIndexOf(boundary);
-    if (idx > maxLength / 2) {
-      cutPoint = idx + boundary.length;
-      break;
-    }
-  }
-
-  // 无合适边界，硬截断
-  const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
-
-  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
-  if (!base.includes("](")) {
-    return base.replace(/\[[^\]]*$/, "") + truncationNotice;
-  }
-
-  return base + truncationNotice;
-}
-
-/**
  * 使用 Turndown 将 HTML 字符串转换为 Markdown
  */
 function convertHtmlToMd(html: string): string {
-  const turndown = createTurndownService();
-  return turndown.turndown(html);
+  return getTurndownService().turndown(html);
 }
 
 // ── 公开 API ─────────────────────────────────────────
@@ -245,11 +220,11 @@ function cleanConvert(html: string, maxLength: number): string {
 
   // ── 第二级：去噪后用 body 转换 ──
   try {
-    // 重新解析：Readability 可能已修改 document，需要干净的 DOM
-    const { document: freshDoc } = parseHTML(html);
-    removeNoiseElements(freshDoc);
+    // 复用已有 document（避免第二次 parseHTML 的内存开销）
+    // Readability 可能已修改 document，但 removeNoiseElements 仍然有效
+    removeNoiseElements(document);
 
-    const bodyHtml = freshDoc.querySelector("body")?.innerHTML ?? freshDoc.documentElement.innerHTML;
+    const bodyHtml = document.querySelector("body")?.innerHTML ?? document.documentElement.innerHTML;
     const md = convertHtmlToMd(bodyHtml);
 
     if (md.length >= 100) {

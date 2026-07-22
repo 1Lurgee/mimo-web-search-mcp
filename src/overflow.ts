@@ -8,6 +8,7 @@
 
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { truncateMarkdown } from "./util.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -48,25 +49,9 @@ export async function handleOverflow(
 
   logger.info(`内容溢出: ${content.length} 字符 > ${maxLength} 字符限制`);
 
-  // 智能截断：按语义边界截断
-  const truncated = content.substring(0, maxLength);
-  const truncationNotice = "\n\n[Content truncated due to size limit...]";
-
-  // 按语义边界截断
-  const boundaries = ["\n\n", "\n", ". "];
-  let cutPoint = -1;
-  for (const boundary of boundaries) {
-    const idx = truncated.lastIndexOf(boundary);
-    if (idx > maxLength / 2) {
-      cutPoint = idx + boundary.length;
-      break;
-    }
-  }
-
-  const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
-
+  // 使用共享的语义边界截断（含 Markdown 链接修复）
   return {
-    content: base + truncationNotice,
+    content: truncateMarkdown(content, maxLength),
     wasTruncated: true,
   };
 }
