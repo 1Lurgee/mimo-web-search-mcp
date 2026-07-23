@@ -65,8 +65,6 @@ src/
 
 - `mimo_web_search` - 网络搜索（支持域名白名单）
 - `mimo_web_fetch` - 网页抓取（支持 AI 处理、SPA 降级）
-- `mimo_cache_stats` - 获取缓存统计
-- `mimo_cache_clear` - 清除缓存
 
 ### 调用流程
 

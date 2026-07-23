@@ -40,7 +40,7 @@ const cache = new LRUCache<string, FetchPageResult>({
   sizeCalculation: (value) => Math.max(1, value.content.length * 2),
 });
 
-// ── 公开 API（保持原有 FetchCache 接口兼容）──────────
+// ── 公开 API ────────────────────────────────────────
 
 export const globalFetchCache = {
   get(url: string): FetchPageResult | null {
@@ -56,19 +56,4 @@ export const globalFetchCache = {
     logger.debug(`缓存写入: ${url} (${data.size} 字节)`);
   },
 
-  clear(): void {
-    const size = cache.size;
-    cache.clear();
-    if (size > 0) {
-      logger.info(`缓存已清除 (${size} 条)`);
-    }
-  },
-
-  stats(): { size: number; maxSize: number; itemCount: number } {
-    return {
-      size: cache.calculatedSize ?? 0,
-      maxSize: MAX_CACHE_SIZE_BYTES,
-      itemCount: cache.size,
-    };
-  },
 };

@@ -136,7 +136,7 @@
 | **大小计算** | 按内容字节 | 按内容字节 |
 | **域名检查缓存** | ✅ 独立 LRU（128 条，5 分钟） | N/A |
 | **请求去重** | ❌ | ✅ in-flight 请求去重（Map<string, Promise>） |
-| **管理工具** | `clearWebFetchCache()` | ✅ MCP 工具（`mimo_cache_stats` / `mimo_cache_clear`） |
+| **管理工具** | `clearWebFetchCache()` | TTL + LRU 自动管理（无需手动操作） |
 
 ### 3.9 AI 内容处理
 
