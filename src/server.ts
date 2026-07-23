@@ -8,7 +8,6 @@ import { loadConfig } from "./config.js";
 import { executeSearch } from "./search.js";
 import { executeFetch } from "./fetch-tool.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { globalFetchCache } from "./cache.js";
 import { createProgressReporter } from "./progress.js";
 
 /** 创建并配置 MCP Server（注册所有工具） */
@@ -100,39 +99,6 @@ export function createServer(): McpServer {
       return limitConcurrency(() =>
         executeFetch({ url, prompt, clean, maxLength: max_length }, signal, reqId, reporter),
       );
-    },
-  );
-
-  // ── 注册工具: mimo_cache_stats ──────────────────────────
-  server.tool(
-    "mimo_cache_stats",
-    "Get cache statistics for web fetch operations. Returns cache size and configuration.",
-    {},
-    toolAnnotations,
-    async (): Promise<CallToolResult> => {
-      const stats = globalFetchCache.stats();
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(stats, null, 2),
-          },
-        ],
-      };
-    },
-  );
-
-  // ── 注册工具: mimo_cache_clear ──────────────────────────
-  server.tool(
-    "mimo_cache_clear",
-    "Clear the web fetch cache. Useful when you need fresh content from a previously fetched URL.",
-    {},
-    toolAnnotations,
-    async (): Promise<CallToolResult> => {
-      globalFetchCache.clear();
-      return {
-        content: [{ type: "text", text: "Cache cleared successfully." }],
-      };
     },
   );
 

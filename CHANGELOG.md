@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **缓存系统** (`FetchCache`)
   - LRU 缓存机制（最大 50 条目）
   - 5 分钟 TTL 自动过期
-  - 缓存统计和清除 API (`mimo_cache_stats`, `mimo_cache_clear`)
+  - ~~缓存统计和清除 API (`mimo_cache_stats`, `mimo_cache_clear`)~~ — 已移除，缓存对调用方透明
 
 - **内容溢出处理** (`overflow.ts`)
   - 智能截断（按语义边界）

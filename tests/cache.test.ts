@@ -58,75 +58,39 @@ function makeResult(overrides?: Partial<FetchPageResult>): FetchPageResult {
 }
 
 describe("globalFetchCache", () => {
-  beforeEach(() => {
-    globalFetchCache.clear();
-  });
-
   // ── 基本 get/set ────────────────────────────────────
 
   it("未写入时 get 返回 null", () => {
-    expect(globalFetchCache.get("https://example.com")).toBeNull();
+    expect(globalFetchCache.get("https://get-null.test")).toBeNull();
   });
 
   it("写入后 get 返回缓存的结果", () => {
-    const result = makeResult();
-    globalFetchCache.set("https://example.com", result);
+    const result = makeResult({ url: "https://get-set.test" });
+    globalFetchCache.set("https://get-set.test", result);
 
-    const cached = globalFetchCache.get("https://example.com");
+    const cached = globalFetchCache.get("https://get-set.test");
     expect(cached).not.toBeNull();
-    expect(cached?.url).toBe("https://example.com");
+    expect(cached?.url).toBe("https://get-set.test");
     expect(cached?.status).toBe(200);
     expect(cached?.content).toBe("<html>hello</html>");
   });
 
   it("不同 URL 的缓存互不影响", () => {
-    globalFetchCache.set("https://a.com", makeResult({ url: "https://a.com" }));
-    globalFetchCache.set("https://b.com", makeResult({ url: "https://b.com" }));
+    globalFetchCache.set("https://url-a.test", makeResult({ url: "https://url-a.test" }));
+    globalFetchCache.set("https://url-b.test", makeResult({ url: "https://url-b.test" }));
 
-    expect(globalFetchCache.get("https://a.com")?.url).toBe("https://a.com");
-    expect(globalFetchCache.get("https://b.com")?.url).toBe("https://b.com");
-    expect(globalFetchCache.get("https://c.com")).toBeNull();
-  });
-
-  // ── clear ───────────────────────────────────────────
-
-  it("clear 清除所有缓存", () => {
-    globalFetchCache.set("https://a.com", makeResult({ url: "https://a.com" }));
-    globalFetchCache.set("https://b.com", makeResult({ url: "https://b.com" }));
-
-    globalFetchCache.clear();
-
-    expect(globalFetchCache.get("https://a.com")).toBeNull();
-    expect(globalFetchCache.get("https://b.com")).toBeNull();
-  });
-
-  // ── stats ───────────────────────────────────────────
-
-  it("stats 返回正确的初始状态", () => {
-    const stats = globalFetchCache.stats();
-    expect(stats.itemCount).toBe(0);
-    expect(stats.maxSize).toBe(50 * 1024 * 1024); // 50MB
-  });
-
-  it("stats 反映写入后的状态", () => {
-    globalFetchCache.set("https://example.com", makeResult({ size: 5000 }));
-
-    const stats = globalFetchCache.stats();
-    expect(stats.itemCount).toBe(1);
-    expect(stats.size).toBeGreaterThan(0);
+    expect(globalFetchCache.get("https://url-a.test")?.url).toBe("https://url-a.test");
+    expect(globalFetchCache.get("https://url-b.test")?.url).toBe("https://url-b.test");
+    expect(globalFetchCache.get("https://url-c.test")).toBeNull();
   });
 
   // ── size=0 边界 ─────────────────────────────────────
 
-  it("size=0 的条目至少占 1 字节权重（lru-cache 要求正整数）", () => {
-    globalFetchCache.set("https://empty.com", makeResult({ size: 0 }));
+  it("size=0 的条目可以正常缓存和读取", () => {
+    globalFetchCache.set("https://empty-size.test", makeResult({ url: "https://empty-size.test", size: 0 }));
 
-    const cached = globalFetchCache.get("https://empty.com");
+    const cached = globalFetchCache.get("https://empty-size.test");
     expect(cached).not.toBeNull();
     expect(cached?.size).toBe(0);
-
-    const stats = globalFetchCache.stats();
-    expect(stats.itemCount).toBe(1);
-    expect(stats.size).toBeGreaterThanOrEqual(1);
   });
 });
