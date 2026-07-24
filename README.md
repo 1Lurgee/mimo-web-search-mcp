@@ -103,14 +103,35 @@ Claude: [自动调用 mimo_web_fetch 抓取网页内容]
 
 ## 环境变量
 
-| 变量                    | 必需 | 说明                          | 默认值                           |
-| ----------------------- | ---- | ----------------------------- | -------------------------------- |
-| `MIMO_API_KEY`          | 是   | MiMo API 密钥                 | -                                |
-| `MIMO_BASE_URL`         | 否   | API 基础 URL                  | `https://api.xiaomimimo.com/v1` |
-| `DEBUG`                 | 否   | 日志级别：`0`=错误，`1`=信息  | `0`                              |
-| `FETCH_TIMEOUT`         | 否   | 抓取超时时间（毫秒）          | `30000`                          |
-| `MAX_FETCH_SIZE`        | 否   | 最大响应体大小（字节）        | `10485760` (10MB)                |
-| `MIMO_ENABLE_BROWSER`   | 否   | 启用浏览器渲染（SPA 降级）    | `false`                          |
+### 必需变量
+
+| 变量                    | 说明                          |
+| ----------------------- | ----------------------------- |
+| `MIMO_API_KEY`          | MiMo API 密钥                 |
+
+### 可选变量
+
+| 变量                    | 说明                                        | 默认值                           |
+| ----------------------- | ------------------------------------------- | -------------------------------- |
+| `MIMO_BASE_URL`         | API 基础 URL                                | `https://api.xiaomimimo.com/v1` |
+| `MIMO_MODEL`            | 模型名称（如 `mimo-v2.5`、`mimo-v2.5-pro`） | `mimo-v2.5`                      |
+| `MIMO_THINKING`         | 启用思考模式                                | `false`                          |
+| `MIMO_AUTO_SUMMARY`     | 超长内容自动摘要                            | `true`                           |
+| `MIMO_ENABLE_BROWSER`   | 启用浏览器渲染（SPA 降级）                  | `false`                          |
+| `DEBUG`                 | 日志级别：`0`=错误，`1`=信息，`2`+=调试    | `0`                              |
+| `REQUEST_TIMEOUT`       | MiMo API 请求超时（毫秒）                  | `60000`                          |
+| `MAX_COMPLETION_TOKENS` | 最大生成 token 数                           | `1024`                           |
+| `TEMPERATURE`           | 采样温度（0 ~ 1.5）                        | `0.3`                            |
+| `TOP_P`                 | 核采样概率（0.01 ~ 1.0）                   | `0.95`                           |
+| `MAX_RETRIES`           | 最大重试次数（0 ~ 10）                      | `2`                              |
+| `RETRY_DELAY`           | 重试延迟（毫秒，100 ~ 60000）              | `1000`                           |
+| `MAX_CONTENT_LENGTH`    | 最大内容长度（字节）                        | `100000`                         |
+| `MAX_CONCURRENT`        | 最大并发请求数（1 ~ 100）                   | `10`                             |
+| `DEFAULT_MAX_KEYWORD`   | 默认最大关键词数（1 ~ 50）                  | `3`                              |
+| `DEFAULT_LIMIT`         | 默认返回结果数（1 ~ 50）                    | `5`                              |
+| `MAX_QUERY_LENGTH`      | 查询最大字符数（100 ~ 100000）              | `10000`                          |
+| `FETCH_TIMEOUT`         | 网页抓取超时时间（毫秒）                    | `30000`                          |
+| `MAX_FETCH_SIZE`        | 最大响应体大小（字节）                      | `10485760` (10MB)                |
 
 ## 开发
 
