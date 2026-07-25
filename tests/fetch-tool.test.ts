@@ -11,9 +11,11 @@ vi.mock("../src/fetch.js", () => ({
 }));
 
 // Mock ssrf.ts 导出的函数（validateUrl 已迁移到 ssrf.ts）
+// 本地部署简化策略：生产仅校验协议/格式/长度，不拦截私有 IP
 vi.mock("../src/ssrf.js", () => ({
   validateUrl: vi.fn(),
-  resolveAndCheckHost: vi.fn(),
+  isPermittedRedirect: vi.fn().mockReturnValue(true),
+  redactUrl: (url: string) => url.replace(/\/\/([^/@]+)@/g, "//***@"),
 }));
 
 // Mock convert.ts 导出的函数
@@ -32,7 +34,7 @@ vi.mock("../src/render.js", () => ({
 
 const { executeFetch } = await import("../src/fetch-tool.js");
 const { fetchPage } = await import("../src/fetch.js");
-const { validateUrl, resolveAndCheckHost } = await import("../src/ssrf.js");
+const { validateUrl } = await import("../src/ssrf.js");
 const { htmlToMarkdown } = await import("../src/convert.js");
 const { isSpaPage, renderWithBrowser, getSpaHint } = await import("../src/render.js");
 
@@ -205,18 +207,18 @@ describe("executeFetch", () => {
   // ── URL 验证失败 ─────────────────────────────────────
 
   describe("URL 验证失败", () => {
-    it("无效 URL（SSRF 阻止）-> 返回安全错误", async () => {
-      mockValidateUrl.mockReturnValue({ valid: false, error: "禁止访问私有/保留地址: 127.0.0.1" });
+    it("无效 URL 格式 -> 返回验证错误", async () => {
+      mockValidateUrl.mockReturnValue({ valid: false, error: "无效的 URL 格式: not a url" });
 
       const result = await executeFetch({
-        url: "http://127.0.0.1/secret",
+        url: "not a url",
         clean: true,
         maxLength: 50000,
       });
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("URL 验证失败");
-      expect(result.content[0].text).toContain("禁止访问私有/保留地址");
+      expect(result.content[0].text).toContain("无效的 URL 格式");
       // 不应调用 fetchPage
       expect(mockFetchPage).not.toHaveBeenCalled();
     });

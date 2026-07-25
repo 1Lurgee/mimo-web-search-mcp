@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { fetchPage } from "./fetch.js";
-import { validateUrl } from "./ssrf.js";
+import { validateUrl, redactUrl } from "./ssrf.js";
 import { htmlToMarkdown } from "./convert.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
@@ -35,7 +35,7 @@ function formatMetadataHeader(
   aiProcessed: boolean,
 ): string {
   let header = `--- Web Fetch Result ---\n`;
-  header += `URL: ${url}\n`;
+  header += `URL: ${redactUrl(url)}\n`;
   header += `Status: ${status}\n`;
   header += `Content-Type: ${contentType ?? "unknown"}\n`;
   header += `Size: ${size} bytes\n`;
@@ -152,7 +152,7 @@ async function callMimoApi(
  * 执行网页抓取
  *
  * 流程：
- * 1. 验证 URL（协议 + SSRF 防护）
+ * 1. 验证 URL（协议 / 格式 / 长度；本地部署允许私有 IP）
  * 2. 抓取网页内容
  * 3. 非 HTML 内容 -> 直接返回原始文本
  * 4. HTML 内容 -> 转换为 Markdown
@@ -178,7 +178,7 @@ export async function executeFetch(
   }
 
   // ── 2. 抓取网页 ──
-  log.info(`开始抓取: ${url}`);
+  log.info(`开始抓取: ${redactUrl(url)}`);
   await reporter?.report(0, "正在抓取网页...");
   const result = await fetchPage(url, { signal });
 
@@ -197,7 +197,7 @@ export async function executeFetch(
   const isHtml = result.contentType?.includes("html") ?? false;
   if (!isHtml) {
     const metadata = formatMetadataHeader(result.url, result.status, result.contentType, result.size, false);
-    // 使用溢出处理，支持大文件保存到磁盘
+    // 超长内容做智能截断（本地工具不落盘）
     const overflow = await handleOverflow(result.content, maxLength);
     return {
       content: [{ type: "text", text: metadata + overflow.content }],

@@ -2,6 +2,7 @@
 
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { redactUrl } from "./ssrf.js";
 
 const config = loadConfig();
 const logger = createLogger(config);
@@ -114,9 +115,9 @@ export async function renderWithBrowser(url: string, timeout: number = config.fe
     // 复用缓存的浏览器实例（避免每次启动 Chromium 的开销）
     if (!_browserClosing && _browserInstance?.isConnected()) {
       browser = _browserInstance;
-      logger.debug(`复用浏览器实例: ${url}`);
+      logger.debug(`复用浏览器实例: ${redactUrl(url)}`);
     } else {
-      logger.info(`启动浏览器渲染: ${url}`);
+      logger.info(`启动浏览器渲染: ${redactUrl(url)}`);
       browser = await playwright.chromium.launch({ headless: true });
       _browserInstance = browser;
     }
@@ -132,7 +133,7 @@ export async function renderWithBrowser(url: string, timeout: number = config.fe
       await page.waitForTimeout(1000);
 
       const html = await page.content();
-      logger.info(`浏览器渲染完成: ${url} (${html.length} 字符)`);
+      logger.info(`浏览器渲染完成: ${redactUrl(url)} (${html.length} 字符)`);
 
       return { html, success: true };
     } finally {

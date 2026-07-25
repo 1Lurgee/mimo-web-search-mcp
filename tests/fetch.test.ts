@@ -1,111 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// ── Mock SSRF 模块（fetch.ts 在模块顶层导入，需提前 mock）────
-// 内联实现 validateUrl（含端口 allowlist + SSRF 检测），跳过 DNS 复查
-// 不使用 require()——vi.mock 工厂在模块加载前执行，无法 require
-vi.mock("../src/ssrf.js", () => {
-  const ipv4Re = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  const isIPv4 = (ip: string): boolean => ipv4Re.test(ip);
-  // IPv6 含冒号，但排除纯 IPv4 和 localhost
-  const isIPv6 = (ip: string): boolean => ip.includes(":");
-
-  function ipv4ToBigInt(ip: string): bigint {
-    const p = ip.split(".").map(Number);
-    return (BigInt(p[0]) << 24n) | (BigInt(p[1]) << 16n) | (BigInt(p[2]) << 8n) | BigInt(p[3]);
-  }
-
-  function isPrivateIPv4(ip: string): boolean {
-    const n = ipv4ToBigInt(ip);
-    return (
-      (n >> 24n) === 127n ||
-      (n >> 24n) === 10n ||
-      (n & 0xfff00000n) === 0xac100000n ||
-      (n & 0xffff0000n) === 0xc0a80000n ||
-      (n & 0xffff0000n) === 0xa9fe0000n ||
-      (n & 0xffc00000n) === 0x64400000n ||
-      (n >> 28n) === 14n ||
-      (n >> 28n) === 15n ||
-      n === 0n
-    );
-  }
-
-  function isPrivateIPv6(ip: string): boolean {
-    const lower = ip.toLowerCase();
-    // ::ffff: 前缀 → IPv4-mapped IPv6
-    // new URL() 标准化 ::ffff:192.168.1.1 为 ::ffff:c0a8:101（hex 格式）
-    if (lower.startsWith("::ffff:")) {
-      const rest = lower.slice(7);
-      if (isIPv4(rest)) return isPrivateIPv4(rest);
-      // hex 格式（如 c0a8:101）→ 解析为 IPv4
-      const parts = rest.split(":");
-      if (parts.length === 2) {
-        const a = parseInt(parts[0], 16);
-        const b = parseInt(parts[1], 16);
-        if (!isNaN(a) && !isNaN(b)) {
-          return isPrivateIPv4(`${(a >> 8) & 0xff}.${a & 0xff}.${(b >> 8) & 0xff}.${b & 0xff}`);
-        }
-      }
-    }
-    if (lower === "::1" || lower === "::") return true;
-    if (lower.startsWith("fe80:")) return true;
-    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
-    return false;
-  }
-
-  function isPrivateHost(hostname: string): boolean {
-    if (hostname === "localhost") return true;
-    const clean = hostname.replace(/^\[|\]$/g, "");
-    if (isIPv4(clean)) return isPrivateIPv4(clean);
-    if (isIPv6(clean)) return isPrivateIPv6(clean);
-    return false;
-  }
-
-  const ALLOWED_PORTS = new Set([80, 443, 8000, 8080, 8443, 8888, 3000, 5000]);
-
-  function validateUrl(url: string): { valid: boolean; error?: string } {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      return { valid: false, error: `无效的 URL 格式: ${url}` };
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { valid: false, error: `不支持的协议: ${parsed.protocol}（仅允许 http/https）` };
-    }
-    if (isPrivateHost(parsed.hostname)) {
-      return { valid: false, error: `禁止访问私有/保留地址: ${parsed.hostname}` };
-    }
-    const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-    if (!ALLOWED_PORTS.has(port)) {
-      return { valid: false, error: `禁止访问端口 ${port}（仅允许 Web 端口）` };
-    }
-    return { valid: true };
-  }
-
-  function isPermittedRedirect(originalUrl: string, redirectUrl: string): boolean {
-    try {
-      const parsedOriginal = new URL(originalUrl);
-      const parsedRedirect = new URL(redirectUrl);
-      if (parsedRedirect.protocol !== parsedOriginal.protocol) return false;
-      if (parsedRedirect.port !== parsedOriginal.port) return false;
-      if (parsedRedirect.username || parsedRedirect.password) return false;
-      const stripWww = (hostname: string) => hostname.replace(/^www\./, "");
-      return stripWww(parsedOriginal.hostname) === stripWww(parsedRedirect.hostname);
-    } catch {
-      return false;
-    }
-  }
-
-  return {
-    validateUrl,
-    isPermittedRedirect,
-    resolveAndCheckHost: async () => null, // 跳过 DNS 复查
-    isPrivateIPv4,
-    isPrivateIPv6,
-    isPrivateHost,
-    ipv4ToBigInt,
-  };
-});
+// 使用真实 ssrf.ts（本地部署简化策略）：
+// - 仅校验协议 / URL 格式 / 长度
+// - 允许 localhost、私有 IP、任意端口、凭证
+// 详细契约见 tests/ssrf.test.ts；本文件聚焦 fetchPage 行为
 
 // ── Mock 配置和日志模块（fetch.ts 在模块顶层加载）────────
 vi.mock("../src/config.js", () => ({
@@ -128,9 +26,8 @@ vi.mock("../src/config.js", () => ({
     maxQueryLength: 10000,
     maxFetchSize: 10485760, // 10MB
     fetchTimeout: 30000,
-    fetchCheckDns: false, // 测试时默认关闭 DNS 复查
-    fetchAllowedPorts: [], // 空数组 = 使用默认 allowlist
     enableBrowser: false, // 测试时默认关闭浏览器渲染
+    autoSummary: true,
   }),
 }));
 
@@ -144,9 +41,8 @@ vi.mock("../src/logger.js", () => ({
 }));
 
 // ── 导入被测模块 ──────────────────────────────────────
-// validateUrl 从 ssrf.js 导入（mock 直接作用于此模块）
-const { validateUrl } = await import("../src/ssrf.js");
 const { detectCharset, fetchPage } = await import("../src/fetch.js");
+const { globalFetchCache } = await import("../src/cache.js");
 
 // ── 辅助函数 ─────────────────────────────────────────
 
@@ -191,179 +87,6 @@ function createMockResponse(overrides: Partial<Response> & { bodyText?: string }
     ...overrides,
   } as Response;
 }
-
-// ── validateUrl 测试 ─────────────────────────────────
-
-describe("validateUrl", () => {
-  it("有效 https URL -> 合法", () => {
-    const result = validateUrl("https://example.com/path");
-    expect(result.valid).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
-
-  it("有效 http URL -> 合法", () => {
-    const result = validateUrl("http://example.com/path");
-    expect(result.valid).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
-
-  it("file:// 协议 -> 拒绝", () => {
-    const result = validateUrl("file:///etc/passwd");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("不支持的协议");
-  });
-
-  it("ftp:// 协议 -> 拒绝", () => {
-    const result = validateUrl("ftp://example.com/file");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("不支持的协议");
-  });
-
-  it("javascript: 协议 -> 拒绝（无效 URL 格式）", () => {
-    const result = validateUrl("javascript:alert(1)");
-    // javascript: 在 Node.js URL 解析中可能抛异常或被识别为无效协议
-    expect(result.valid).toBe(false);
-  });
-
-  it("127.0.0.1 回环地址 -> 拒绝", () => {
-    const result = validateUrl("http://127.0.0.1/admin");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("localhost -> 拒绝", () => {
-    const result = validateUrl("http://localhost:8080/api");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("10.x.x.x A 类私有地址 -> 拒绝", () => {
-    const result = validateUrl("http://10.0.0.1/internal");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  // 以下三个测试覆盖位运算符号扩展 bug 的修复验证：
-  // 原版用 number + hex 字面量比较，0xac100000/0xc0a80000/0xa9fe0000 被窄化为
-  // 有符号 Int32 负数导致 === 永远为 false。
-  // 已修复为 BigInt 比较，彻底消除符号扩展问题。
-
-  it("172.16.x.x B 类私有地址 -> 拒绝（已修复位运算 bug）", () => {
-    const result = validateUrl("http://172.16.0.1/internal");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("172.31.x.x B 类私有地址边界 -> 拒绝", () => {
-    const result = validateUrl("http://172.31.255.255/internal");
-    expect(result.valid).toBe(false);
-  });
-
-  it("172.15.x.x 非 B 类私有地址 -> 放行", () => {
-    const result = validateUrl("http://172.15.0.1:8080/internal");
-    expect(result.valid).toBe(true);
-  });
-
-  it("172.32.x.x 非 B 类私有地址 -> 放行", () => {
-    const result = validateUrl("http://172.32.0.1:8080/internal");
-    expect(result.valid).toBe(true);
-  });
-
-  it("192.168.x.x C 类私有地址 -> 拒绝（已修复位运算 bug）", () => {
-    const result = validateUrl("http://192.168.1.1/internal");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("169.254.x.x 链路本地地址 -> 拒绝（已修复位运算 bug）", () => {
-    const result = validateUrl("http://169.254.169.254/metadata");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("100.64.x.x 运营商 NAT 地址 -> 拒绝", () => {
-    const result = validateUrl("http://100.64.0.1/internal");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("::ffff:192.168.1.1 IPv4-mapped IPv6 -> 拒绝", () => {
-    const result = validateUrl("http://[::ffff:192.168.1.1]/internal");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("0.0.0.0 未指定地址 -> 拒绝", () => {
-    const result = validateUrl("http://0.0.0.0/");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("::1 IPv6 回环地址 -> 拒绝", () => {
-    const result = validateUrl("http://[::1]/");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("私有/保留地址");
-  });
-
-  it("普通域名 example.com -> 合法", () => {
-    const result = validateUrl("https://example.com");
-    expect(result.valid).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
-
-  // ── 端口 allowlist 测试 ────────────────────────────────
-
-  it("Redis 端口 6379 -> 拒绝", () => {
-    const result = validateUrl("http://example.com:6379");
-    expect(result.valid).toBe(false);
-    expect(result.error).toContain("禁止访问端口");
-  });
-
-  it("MySQL 端口 3306 -> 拒绝", () => {
-    const result = validateUrl("http://example.com:3306");
-    expect(result.valid).toBe(false);
-  });
-
-  it("SSH 端口 22 -> 拒绝", () => {
-    const result = validateUrl("http://example.com:22");
-    expect(result.valid).toBe(false);
-  });
-
-  it("MongoDB 端口 27017 -> 拒绝", () => {
-    const result = validateUrl("http://example.com:27017");
-    expect(result.valid).toBe(false);
-  });
-
-  it("SMTP 端口 25 -> 拒绝", () => {
-    const result = validateUrl("http://example.com:25");
-    expect(result.valid).toBe(false);
-  });
-
-  it("默认 HTTPS 443 端口 -> 放行", () => {
-    const result = validateUrl("https://example.com");
-    expect(result.valid).toBe(true);
-  });
-
-  it("默认 HTTP 80 端口 -> 放行", () => {
-    const result = validateUrl("http://example.com");
-    expect(result.valid).toBe(true);
-  });
-
-  it("8080 端口 -> 放行", () => {
-    const result = validateUrl("http://example.com:8080");
-    expect(result.valid).toBe(true);
-  });
-
-  it("8443 端口 -> 放行", () => {
-    const result = validateUrl("https://example.com:8443");
-    expect(result.valid).toBe(true);
-  });
-
-  it("8888 端口 -> 放行", () => {
-    const result = validateUrl("http://example.com:8888");
-    expect(result.valid).toBe(true);
-  });
-});
 
 // ── detectCharset 测试 ────────────────────────────────
 
@@ -414,11 +137,13 @@ describe("detectCharset", () => {
 describe("fetchPage", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    globalFetchCache.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    globalFetchCache.clear();
   });
 
   it("成功抓取 -> 返回正确的内容和元数据", async () => {
@@ -609,17 +334,137 @@ describe("fetchPage", () => {
     expect(result.error).toContain("连接被拒绝");
   });
 
-  it("URL 验证失败 -> 返回验证错误", async () => {
+  it("URL 验证失败（非 http/https）-> 返回验证错误", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await fetchPage("http://127.0.0.1/internal");
+    // 本地部署允许私有 IP；仅拒绝非 http/https 协议
+    const result = await fetchPage("file:///etc/passwd");
 
     expect(result.status).toBe(0);
     expect(result.content).toBe("");
-    expect(result.error).toContain("私有/保留地址");
+    expect(result.error).toContain("不支持的协议");
     // 不应发起网络请求
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("本地部署允许私有地址 -> 保持 http 不升级并会发起请求", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      createMockResponse({
+        ok: true,
+        status: 200,
+        url: "http://127.0.0.1/internal",
+        headers: new Headers({ "content-type": "text/html" }),
+        bodyText: "<html><body>local</body></html>",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // 回环/私有地址不应 HTTP→HTTPS 升级
+    const result = await fetchPage("http://127.0.0.1/internal");
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalled();
+    const requestedUrl = String(fetchMock.mock.calls[0][0]);
+    expect(requestedUrl.startsWith("http://127.0.0.1")).toBe(true);
+  });
+
+  it("公网 http URL -> 自动升级为 https 再请求", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      createMockResponse({
+        ok: true,
+        status: 200,
+        url: "https://example.com/",
+        headers: new Headers({ "content-type": "text/html" }),
+        bodyText: "<html><body>ok</body></html>",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchPage("http://example.com/");
+    expect(result.error).toBeUndefined();
+    const requestedUrl = String(fetchMock.mock.calls[0][0]);
+    expect(requestedUrl.startsWith("https://example.com")).toBe(true);
+  });
+
+  it("body 读取中途 abort -> 返回取消错误且不缓存半截内容", async () => {
+    const controller = new AbortController();
+    const url = "https://example.com/partial-abort-mid-stream";
+
+    const makeStream = () => {
+      let pullCount = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(ctrl) {
+          pullCount++;
+          if (pullCount === 1) {
+            ctrl.enqueue(new TextEncoder().encode("<html><body>partial-secret"));
+            // 同步 abort：read() 返回后循环应看到 signal.aborted 并抛错
+            controller.abort();
+            return;
+          }
+          ctrl.enqueue(new TextEncoder().encode("-more"));
+          ctrl.close();
+        },
+      });
+    };
+
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        url,
+        headers: new Headers({ "content-type": "text/html" }),
+        body: makeStream(),
+        bodyUsed: false,
+        text: async () => "",
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await fetchPage(url, { signal: controller.signal });
+    expect(first.error).toBe("请求被取消");
+    expect(first.content).toBe("");
+    // 错误结果不得写入缓存
+    expect(globalFetchCache.get(url)).toBeNull();
+
+    // 第二次无 abort：必须重新发请求（证明未缓存半截成功）
+    const second = await fetchPage(url);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(second.error).toBeUndefined();
+    expect(second.content).toContain("partial-secret");
+  });
+
+  it("带凭证同站相对重定向 -> 允许跟随", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        callCount++;
+        const u = String(url);
+        if (u.includes("/start")) {
+          return createMockResponse({
+            ok: false,
+            status: 302,
+            headers: new Headers({ location: "/next" }),
+          });
+        }
+        return createMockResponse({
+          ok: true,
+          status: 200,
+          url: u,
+          headers: new Headers({ "content-type": "text/html" }),
+          bodyText: "<html><body>authed</body></html>",
+        });
+      }),
+    );
+
+    const result = await fetchPage("https://user:secret@example.com/start");
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(callCount).toBe(2);
   });
 
   it("重定向超过限制 -> 返回重定向错误", async () => {
@@ -640,18 +485,18 @@ describe("fetchPage", () => {
     expect(result.error).toContain("重定向次数超过限制");
   });
 
-  it("重定向目标为私有地址 -> 被安全重定向检查拦截", async () => {
+  it("跨主机重定向 -> 被 isPermittedRedirect 拦截", async () => {
     let callCount = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => {
         callCount++;
         if (callCount === 1) {
-          // 第一次请求返回重定向到回环地址（被 isPermittedRedirect 拦截）
+          // 跨主机重定向（即使目标是公网）也不自动跟随
           return createMockResponse({
             ok: false,
             status: 301,
-            headers: new Headers({ location: "http://127.0.0.1/admin" }),
+            headers: new Headers({ location: "https://evil.example/phish" }),
           });
         }
         return createMockResponse({ ok: true, status: 200 });
@@ -660,7 +505,7 @@ describe("fetchPage", () => {
 
     const result = await fetchPage("https://example.com/start");
 
-    // 重定向到不同域名/协议（含私有地址）应被安全重定向检查拦截
+    // 主机名不一致 -> 不安全重定向
     expect(result.error).toContain("不安全重定向");
     // 只发起了第一次请求，第二次因安全重定向检查而未调用 fetch
     expect(callCount).toBe(1);
@@ -788,15 +633,25 @@ describe("fetchPage", () => {
     expect(result.size).toBe(600000000);
   });
 
-  it("端口 6379 SSRF -> 拒绝，不发起请求", async () => {
-    const fetchMock = vi.fn();
+  it("本地部署允许任意端口 -> 公网 http 升级为 https 后请求", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      createMockResponse({
+        ok: true,
+        status: 200,
+        // 公网 HTTP 自动升级后 URL 为 https://example.com:6379/
+        url: "https://example.com:6379/",
+        headers: new Headers({ "content-type": "text/plain" }),
+        bodyText: "ok",
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await fetchPage("http://example.com:6379");
 
-    expect(result.status).toBe(0);
-    expect(result.error).toContain("禁止访问端口");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/^https:\/\/example\.com:6379\/?$/);
   });
 
   it("端口 8080 请求 -> 正常放行", async () => {
