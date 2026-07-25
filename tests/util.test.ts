@@ -26,7 +26,12 @@ vi.mock("../src/config.js", () => ({
   }),
 }));
 
-import { mergeAbortSignals, calculateRetryDelay, fetchWithTimeout, TIMEOUT_REASON } from "../src/util.js";
+import {
+  mergeAbortSignals,
+  calculateRetryDelay,
+  fetchWithTimeout,
+  TIMEOUT_REASON,
+} from "../src/util.js";
 
 describe("mergeAbortSignals", () => {
   it("单个未中止信号返回自身", () => {
@@ -51,16 +56,19 @@ describe("mergeAbortSignals", () => {
     expect(result.aborted).toBe(true);
   });
 
-  it("已中止信号立即返回已中止状态", () => {
+  it("已中止信号立即返回已中止状态，并保留 reason", () => {
     const c1 = new AbortController();
     c1.abort("already_done");
     const c2 = new AbortController();
 
     const result = mergeAbortSignals(c1.signal, c2.signal);
     expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("already_done");
+    // 应返回原信号，避免 AbortSignal.abort() 丢掉 reason
+    expect(result).toBe(c1.signal);
   });
 
-  it("所有信号都已中止时返回已中止状态", () => {
+  it("所有信号都已中止时返回第一个已中止信号并保留其 reason", () => {
     const c1 = new AbortController();
     const c2 = new AbortController();
     c1.abort("a");
@@ -68,6 +76,17 @@ describe("mergeAbortSignals", () => {
 
     const result = mergeAbortSignals(c1.signal, c2.signal);
     expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("a");
+  });
+
+  it("已超时信号合并后仍保留 TIMEOUT_REASON", () => {
+    const timeout = new AbortController();
+    timeout.abort(TIMEOUT_REASON);
+    const external = new AbortController();
+
+    const result = mergeAbortSignals(external.signal, timeout.signal);
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe(TIMEOUT_REASON);
   });
 });
 

@@ -21,9 +21,8 @@ vi.mock("../src/config.js", () => ({
     maxQueryLength: 10000,
     maxFetchSize: 10485760,
     fetchTimeout: 30000,
-    fetchCheckDns: false,
-    fetchAllowedPorts: [],
     enableBrowser: false,
+    autoSummary: true,
   }),
 }));
 

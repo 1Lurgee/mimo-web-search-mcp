@@ -4,10 +4,12 @@
 
 一个基于 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 的服务器，将小米 MiMo 的 `web_search` API 封装为标准 MCP 工具，让 Claude Code 等 AI 助手能够进行实时网络搜索。
 
+> **本地单用户工具**：面向本机 Claude Code 使用。`mimo_web_fetch` 允许访问 localhost、私有 IP 与任意端口，便于调试本机/内网服务；**不要**作为共享服务暴露给不可信远程用户。
+
 ## 功能特性
 
 - 🔍 **实时网络搜索** - 获取最新的网络信息
-- 🌐 **网页抓取** - 抓取并提取指定 URL 的网页正文内容
+- 🌐 **网页抓取** - 抓取并提取指定 URL 的网页正文内容（含本机/内网）
 - 📊 **结构化结果** - 返回标题、URL、摘要和来源引用
 - 🔄 **自动重试** - 内置重试机制和超时控制
 - 📝 **详细日志** - 通过 DEBUG 环境变量控制日志级别
@@ -99,7 +101,12 @@ Claude: [自动调用 mimo_web_fetch 抓取网页内容]
 
 **主要参数**：`url`（必需）、`prompt`（AI 处理指令）、`clean`（提取正文）
 
-**注意**：SPA 页面（React/Vue）需要设置 `MIMO_ENABLE_BROWSER=true` 并安装 playwright。
+**注意**：
+
+- SPA 页面（React/Vue）需要设置 `MIMO_ENABLE_BROWSER=true` 并安装 playwright。
+- URL 校验仅限制 `http`/`https` 与长度；**允许** localhost、私有 IP、任意端口与 URL 凭证。
+- 带凭证的 URL 仍可请求，但日志与结果元数据中的凭证会被脱敏（`user:pass@` → `***:***@`）。
+- 自动重定向只跟随同协议/同端口/同主机（允许 www 增减）；跨主机重定向需直接请求目标 URL。
 
 ## 环境变量
 

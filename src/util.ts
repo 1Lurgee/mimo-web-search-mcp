@@ -10,13 +10,17 @@ const config = loadConfig();
  * 合并多个 AbortSignal 为一个——任一信号触发即中止。
  * Node.js >= 20 原生支持 AbortSignal.any()，无需 polyfill。
  *
- * Bug fix: 如果任何信号已中止，立即返回已中止的信号，
- * 而不是过滤掉它导致取消语义丢失。
+ * - 若任一输入已中止：返回**该已中止信号本身**（保留 reason，
+ *   避免丢失 TIMEOUT_REASON 导致超时被误报为「请求被取消」）
+ * - 忽略 null/undefined 占位
  */
-export function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
-  if (signals.some((s) => s?.aborted)) return AbortSignal.abort();
-  const valid = signals.filter((s) => s);
+export function mergeAbortSignals(...signals: (AbortSignal | null | undefined)[]): AbortSignal {
+  const valid = signals.filter((s): s is AbortSignal => s != null);
   if (valid.length === 0) return AbortSignal.abort();
+
+  const alreadyAborted = valid.find((s) => s.aborted);
+  if (alreadyAborted) return alreadyAborted;
+
   if (valid.length === 1) return valid[0];
   return AbortSignal.any(valid);
 }

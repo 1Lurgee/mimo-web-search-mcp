@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 这是一个 MCP (Model Context Protocol) 服务器，将小米 MiMo 的 web_search API 和网页抓取功能包装为 Claude Code 可用的工具。
 
+**部署模型**：本地单用户使用。`mimo_web_fetch` 故意允许访问 localhost、私有 IP、任意端口与 URL 内凭证，以便调试本机/内网服务；**不要**把本服务暴露给不可信远程用户或共享多租户环境。
+
 ## 技术栈
 
 - **运行时**: Node.js (v20+)
@@ -52,7 +54,7 @@ src/
 ├── fetch.ts      # 网页抓取核心（流式读取、编码检测、超时）
 ├── fetch-tool.ts # 网页抓取 MCP 工具层（validate→fetch→convert→AI）
 ├── convert.ts    # HTML 转 Markdown（linkedom + Readability + Turndown）
-├── ssrf.ts       # SSRF 防护（私有 IP 检测、DNS rebinding 复查）
+├── ssrf.ts       # URL 校验（本地简化）+ redactUrl 脱敏 + 同域重定向检查
 ├── cache.ts      # 网页抓取缓存（LRU + TTL）
 ├── render.ts     # SPA 浏览器渲染降级（Playwright）
 ├── overflow.ts   # 内容溢出处理（智能截断）
@@ -66,10 +68,23 @@ src/
 - `mimo_web_search` - 网络搜索（支持域名白名单）
 - `mimo_web_fetch` - 网页抓取（支持 AI 处理、SPA 降级）
 
+### 本地安全策略（有意简化）
+
+| 能力 | 行为 |
+| ---- | ---- |
+| 协议 | 仅允许 `http` / `https` |
+| 私有 IP / localhost | **允许**（本地调试需要） |
+| 端口 | **不限制** |
+| URL 凭证 `user:pass@` | **允许**（请求侧保留；日志与元数据头经 `redactUrl` 脱敏） |
+| DNS rebinding 复查 | **不做** |
+| 自动重定向 | 仅跟随同协议/同端口/同主机（允许 www 增减），跨主机需调用方直接请求目标 URL |
+| `MIMO_BASE_URL` | 强制 HTTPS |
+| 响应体 | 大小上限 + 流式截断，二进制类型拒绝 |
+
 ### 调用流程
 
 1. Claude Code 通过 stdio 连接到 MCP 服务器
 2. 调用工具时，服务器校验参数并执行相应逻辑
 3. 搜索：向 MiMo API 发送请求，格式化结果（引用去重）
-4. 抓取：校验 URL → 检查缓存 → 流式读取 → HTML 转 Markdown → 可选 AI 处理
+4. 抓取：校验 URL（协议/格式）→ 检查缓存 → 流式读取 → HTML 转 Markdown → 可选 AI 处理
 5. SPA 页面自动检测，可选 Playwright 浏览器渲染

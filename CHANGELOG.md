@@ -28,9 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 自动移除内嵌的 base64 数据
   - 防止 token 浪费
 
-- **SSRF 防护**（简化版）
-  - 私有 IP 检测
-  - 本地部署友好的安全策略
+- **URL 校验 + 重定向约束**（本地部署简化版）
+  - 仅允许 `http` / `https`，限制 URL 长度
+  - **有意允许** localhost、私有 IP、任意端口、URL 凭证（方便本机/内网调试）
+  - 自动重定向仅跟随同协议/同端口/同主机（允许 www 增减）
+  - **不做**私有 IP 阻止、端口 allowlist、DNS rebinding 复查
+  - 不适合暴露给不可信远程用户或多租户环境
 
 - **引用去重**
   - 搜索结果中同一 URL 只保留首次出现
@@ -54,8 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 严格的类型检查
 
 ### Removed
-- 移除过度设计的安全功能（本地部署不需要）
-  - SSRF 私有 IP 阻止
+- 移除面向多租户/远程托管场景的严格 SSRF 控件（本项目仅本地单用户使用）
+  - 私有 IP / localhost 阻止
   - 凭证检测
   - 单标签主机拒绝
   - 端口 allowlist
@@ -65,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修复 ESLint 配置问题
 - 修复测试覆盖率报告
 - 修复 GitHub Actions CI/CD 流水线
+- 同步测试与文档到本地简化安全策略（去掉“严格 SSRF 已启用”的假象）
 
 ## [2.0.0] - 2026-07-15
 
@@ -93,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1. **网页抓取**：可以抓取任意 URL 的网页内容，自动提取正文并转换为 Markdown 格式
 2. **智能缓存**：避免重复抓取，提升性能
 3. **内容优化**：自动剥离 base64 数据、智能截断，节省 token
-4. **安全防护**：简化的 SSRF 防护，适合本地部署
+4. **本地安全策略**：协议/重定向约束 + 本机与内网可达（非远程多租户 SSRF 防护）
 
 ### 升级指南
 

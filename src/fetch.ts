@@ -3,7 +3,7 @@
 import os from "node:os";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { validateUrl, isPermittedRedirect } from "./ssrf.js";
+import { validateUrl, isPermittedRedirect, redactUrl, isLocalOrPrivateHostname } from "./ssrf.js";
 import { mergeAbortSignals, TIMEOUT_REASON } from "./util.js";
 import { globalFetchCache } from "./cache.js";
 
@@ -91,7 +91,7 @@ export interface FetchPageResult {
   error?: string;
 }
 
-// ── SSRF 防护（核心逻辑已抽至 ./ssrf.ts）──────────────
+// ── URL 校验（核心逻辑已抽至 ./ssrf.ts；本地部署简化策略）──
 
 // ── 编码检测 ──────────────────────────────────────────
 
@@ -217,8 +217,22 @@ function isBinaryContentType(contentType: string | null): boolean {
 }
 
 /**
- * 流式读取响应体，限制最大字节数以防止 OOM
- * 当累计达到 maxSize 即提前终止，返回截断后的内容
+ * 将 abort 规范为 AbortError，并尽量保留 signal.reason（如 TIMEOUT_REASON）。
+ * Node/undici 在 signal abort 时，fetch 拒绝的 AbortError.cause 往往就是 reason。
+ */
+function abortErrorFromSignal(signal?: AbortSignal): DOMException {
+  const err = new DOMException("The operation was aborted.", "AbortError");
+  const reason = signal?.reason;
+  if (reason !== undefined) {
+    Object.defineProperty(err, "cause", { value: reason, configurable: true });
+  }
+  return err;
+}
+
+/**
+ * 流式读取响应体，限制最大字节数以防止 OOM。
+ * 当累计达到 maxSize 即提前终止，返回截断后的内容。
+ * signal 中止时必须抛出 AbortError（不可静默返回半截数据，否则会被缓存）。
  */
 async function streamToLimitedBuffer(
   body: ReadableStream<Uint8Array> | null,
@@ -226,6 +240,7 @@ async function streamToLimitedBuffer(
   signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   if (!body) return new ArrayBuffer(0);
+  if (signal?.aborted) throw abortErrorFromSignal(signal);
 
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -233,13 +248,27 @@ async function streamToLimitedBuffer(
 
   try {
     while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
+      // 中止必须抛错：静默 break 会被上层当成成功 200 并写入缓存
+      if (signal?.aborted) throw abortErrorFromSignal(signal);
+
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (readErr) {
+        // 底层流因 abort/cancel 失败时，优先表现为 AbortError
+        if (signal?.aborted) throw abortErrorFromSignal(signal);
+        throw readErr;
+      }
+
+      // read() 等待期间可能已 abort；即便 done=true 也不能当成功半截内容
+      if (signal?.aborted) throw abortErrorFromSignal(signal);
+
       if (done || !value) break;
 
       const remaining = maxSize - totalSize;
       if (remaining <= 0) {
-        // 已达上限，丢弃剩余数据
+        // 已达上限，丢弃剩余数据（截断成功，非错误）
         break;
       }
 
@@ -280,7 +309,7 @@ async function fetchPageInternal(
   const { signal, maxSize = config.maxFetchSize, timeout = config.fetchTimeout } = options;
   const log = logger;
 
-  // URL 安全验证（含端口 allowlist）
+  // URL 基础验证（协议 / 格式 / 长度；本地部署允许私有 IP 与任意端口）
   const validation = validateUrl(url);
   if (!validation.valid) {
     return {
@@ -293,15 +322,15 @@ async function fetchPageInternal(
     };
   }
 
-  // HTTP → HTTPS 自动升级（借鉴 Claude Code 设计）
-  // 安全收益：防止明文传输；如果 HTTPS 失败，外层 catch 不会 fallback（本地内网场景少见）
+  // HTTP → HTTPS：仅对公网主机升级；localhost / 私有 IP / 链路本地保持 http，
+  // 以便本机与内网只监听明文 HTTP 的开发服务可抓取。
   let upgradedUrl = url;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "http:") {
+    if (parsed.protocol === "http:" && !isLocalOrPrivateHostname(parsed.hostname)) {
       parsed.protocol = "https:";
       upgradedUrl = parsed.toString();
-      log.info(`HTTP 自动升级为 HTTPS: ${url} -> ${upgradedUrl}`);
+      log.info(`HTTP 自动升级为 HTTPS: ${redactUrl(url)} -> ${redactUrl(upgradedUrl)}`);
     }
   } catch {
     // URL 已通过 validateUrl 校验，不会到这里
@@ -316,7 +345,7 @@ async function fetchPageInternal(
     : timeoutController.signal;
 
   try {
-    log.info(`抓取网页: ${upgradedUrl}`);
+    log.info(`抓取网页: ${redactUrl(upgradedUrl)}`);
 
     const resp = await fetch(upgradedUrl, {
       method: "GET",
@@ -330,7 +359,7 @@ async function fetchPageInternal(
       redirect: "manual",
     });
 
-    // 处理重定向：手动跟随以对每个重定向目标做 SSRF 检查
+    // 处理重定向：手动跟随，并用 isPermittedRedirect 限制跨主机/降级
     if (resp.status >= 300 && resp.status < 400) {
       if (redirectCount >= MAX_REDIRECTS) {
         return {
@@ -372,21 +401,20 @@ async function fetchPageInternal(
         };
       }
 
-      // 安全检查：重定向必须满足 isPermittedRedirect 的 4 项条件（对齐 Claude Code 设计）
-      // 防止开放重定向攻击——恶意服务器通过 302 将请求导向内网或钓鱼站点
+      // 安全检查：协议/端口/主机（www 可增减）；凭证允许（相对 Location 会继承 base userinfo）
       if (!isPermittedRedirect(upgradedUrl, redirectUrl)) {
-        log.info(`不安全重定向，返回信息让调用方决定: ${upgradedUrl} -> ${redirectUrl}`);
+        log.info(`不安全重定向，返回信息让调用方决定: ${redactUrl(upgradedUrl)} -> ${redactUrl(redirectUrl)}`);
         return {
           url: upgradedUrl,
           status: resp.status,
           contentType: null,
           size: 0,
           content: "",
-          error: `不安全重定向: ${upgradedUrl} -> ${redirectUrl}（状态码 ${resp.status}）。原因：协议/端口/主机名不一致或携带凭证。如需跟随，请直接请求目标 URL。`,
+          error: `不安全重定向: ${redactUrl(upgradedUrl)} -> ${redactUrl(redirectUrl)}（状态码 ${resp.status}）。原因：协议/端口/主机名不一致。如需跟随，请直接请求目标 URL。`,
         };
       }
 
-      log.info(`同域重定向: ${upgradedUrl} -> ${redirectUrl}`);
+      log.info(`同域重定向: ${redactUrl(upgradedUrl)} -> ${redactUrl(redirectUrl)}`);
 
       // 递归跟随重定向，重定向计数 +1
       return fetchPageInternal(redirectUrl, options, redirectCount + 1);
@@ -461,7 +489,7 @@ async function fetchPageInternal(
       content = new TextDecoder("utf-8").decode(arrayBuffer);
     }
 
-    log.info(`抓取完成: ${resp.url || upgradedUrl} (${resp.status}, ${size} 字节, 编码: ${charset})`);
+    log.info(`抓取完成: ${redactUrl(resp.url || upgradedUrl)} (${resp.status}, ${size} 字节, 编码: ${charset})`);
 
     return {
       url: resp.url || upgradedUrl,
@@ -557,7 +585,7 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
   // 检查是否有相同 URL 的进行中请求（去重）
   const inflight = inflightRequests.get(url);
   if (inflight) {
-    logger.debug(`复用进行中的请求: ${url}`);
+    logger.debug(`复用进行中的请求: ${redactUrl(url)}`);
     return inflight;
   }
 

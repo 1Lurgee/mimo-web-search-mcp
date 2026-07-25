@@ -8,11 +8,12 @@
 
 import { LRUCache } from "lru-cache";
 import { createLogger } from "./logger.js";
+import { loadConfig } from "./config.js";
+import { redactUrl } from "./ssrf.js";
 import type { FetchPageResult } from "./fetch.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
-import { loadConfig } from "./config.js";
 const config = loadConfig();
 const logger = createLogger(config);
 
@@ -46,14 +47,18 @@ export const globalFetchCache = {
   get(url: string): FetchPageResult | null {
     const entry = cache.get(url);
     if (entry) {
-      logger.debug(`缓存命中: ${url}`);
+      logger.debug(`缓存命中: ${redactUrl(url)}`);
     }
     return entry ?? null;
   },
 
   set(url: string, data: FetchPageResult): void {
     cache.set(url, data);
-    logger.debug(`缓存写入: ${url} (${data.size} 字节)`);
+    logger.debug(`缓存写入: ${redactUrl(url)} (${data.size} 字节)`);
   },
 
+  /** 清空缓存（测试或手动失效） */
+  clear(): void {
+    cache.clear();
+  },
 };
