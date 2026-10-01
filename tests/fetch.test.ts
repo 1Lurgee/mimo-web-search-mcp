@@ -1,48 +1,43 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { AppConfig } from "../src/config.js";
+import type { FetchPageOptions } from "../src/fetch.js";
 
 // 使用真实 ssrf.ts（本地部署简化策略）：
 // - 仅校验协议 / URL 格式 / 长度
 // - 允许 localhost、私有 IP、任意端口、凭证
 // 详细契约见 tests/ssrf.test.ts；本文件聚焦 fetchPage 行为
 
-// ── Mock 配置和日志模块（fetch.ts 在模块顶层加载）────────
-vi.mock("../src/config.js", () => ({
-  loadConfig: () => ({
-    apiKey: "test-api-key",
-    baseUrl: "https://api.xiaomimimo.com/v1",
-    model: "mimo-v2.5-pro",
-    requestTimeout: 60000,
-    maxCompletionTokens: 1024,
-    temperature: 0.3,
-    topP: 0.95,
-    thinking: false,
-    logLevel: 0,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
-    defaultMaxKeyword: 3,
-    defaultLimit: 5,
-    maxQueryLength: 10000,
-    maxFetchSize: 10485760, // 10MB
-    fetchTimeout: 30000,
-    enableBrowser: false, // 测试时默认关闭浏览器渲染
-    autoSummary: true,
-  }),
-}));
-
-vi.mock("../src/logger.js", () => ({
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
-}));
-
 // ── 导入被测模块 ──────────────────────────────────────
-const { detectCharset, fetchPage } = await import("../src/fetch.js");
+const { fetchPage: fetchPageRaw } = await import("../src/fetch.js");
+const { detectCharset } = await import("../src/charset.js");
 const { globalFetchCache } = await import("../src/cache.js");
+
+// config 经参数注入（fetch.ts 不再模块级 loadConfig），测试无需 mock config/logger
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2,
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760, // 10MB
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
+
+const fetchPage = (url: string, options: FetchPageOptions = {}) =>
+  fetchPageRaw(url, { ...options, config: TEST_CONFIG });
 
 // ── 辅助函数 ─────────────────────────────────────────
 

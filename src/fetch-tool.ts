@@ -4,22 +4,15 @@ import { randomUUID } from "node:crypto";
 import { fetchPage } from "./fetch.js";
 import { validateUrl, redactUrl } from "./ssrf.js";
 import { htmlToMarkdown } from "./convert.js";
-import { loadConfig } from "./config.js";
+import { type AppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { MimoResponseSchema, type FetchParams } from "./types.js";
+import { type FetchParams } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { fetchWithTimeout, truncateMarkdown, TIMEOUT_REASON } from "./util.js";
+import { truncateMarkdown } from "./util.js";
 import { isSpaPage, renderWithBrowser, getSpaHint } from "./render.js";
 import { handleOverflow } from "./overflow.js";
-import { emit401 } from "./attribution.js";
+import { chatCompletion, type MimoRequestBody } from "./mimo-client.js";
 import type { ProgressReporter } from "./progress.js";
-
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
-
-// ── HTTP 客户端（共用工具已迁移至 ./util.ts）──────────
 
 // ── 元数据头格式化 ─────────────────────────────────────
 
@@ -47,103 +40,23 @@ function formatMetadataHeader(
   return header;
 }
 
-// ── AI 处理（调用 MiMo API）────────────────────────────
+// ── AI 处理（直接调用 mimo-client.ts 的 chatCompletion）──
 
-/**
- * 调用 MiMo API 对抓取的 Markdown 内容进行 AI 分析
- * 使用与 search.ts 相同的 API 模式
- */
-async function callMimoApi(
-  markdown: string,
-  prompt: string,
-  signal?: AbortSignal,
-  reqId?: string,
-): Promise<{ success: true; content: string } | { success: false; error: string }> {
-  const log = reqId ? logger.withReqId(reqId) : logger;
+/** AI 处理结果：failure 只带 error 文案，调用方据此走 fallback */
+type AiResult = { success: true; content: string } | { success: false; error: string };
 
-  const body = {
-    model: config.model,
-    messages: [
-      {
-        role: "system" as const,
-        content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
-      },
-      {
-        role: "user" as const,
-        content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
-      },
-    ],
-    max_completion_tokens: config.maxCompletionTokens,
-    temperature: config.temperature,
-    top_p: config.topP,
-    stream: false,
-    thinking: { type: config.thinking ? "enabled" as const : "disabled" as const },
-  };
-
-  if (log.isDebugEnabled()) {
-    log.debug("MiMo API request body:", JSON.stringify(body, null, 2));
-  }
-
-  try {
-    log.info("调用 MiMo API 进行内容分析...");
-
-    const resp = await fetchWithTimeout(
-      `${config.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "api-key": config.apiKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      },
-      config.requestTimeout,
-      signal,
-    );
-
-    log.info(`MiMo API 响应状态: ${resp.status}`);
-
-    if (!resp.ok) {
-      await resp.text().catch(() => "");
-      // 记录 401 归因事件（借鉴 grok-build 设计）
-      if (resp.status === 401) {
-        emit401("MiMoAPI", config.apiKey, { status: resp.status });
-      }
-      return { success: false, error: `MiMo API 请求失败 (HTTP ${resp.status})` };
-    }
-
-    const rawData: unknown = await resp.json();
-    if (log.isDebugEnabled()) {
-      log.debug("MiMo API response:", JSON.stringify(rawData, null, 2));
-    }
-
-    const parsed = MimoResponseSchema.safeParse(rawData);
-    if (!parsed.success) {
-      log.error("MiMo API 响应校验失败:", parsed.error.message);
-      return { success: false, error: "MiMo API 返回了无效的响应格式" };
-    }
-
-    const message = parsed.data.choices?.[0]?.message;
-    if (!message?.content) {
-      return { success: false, error: "MiMo API 返回了空响应" };
-    }
-
-    log.info(`AI 分析完成，内容长度: ${message.content.length}`);
-    return { success: true, content: message.content };
-  } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-
-    if (error.name === "AbortError") {
-      const cause = "cause" in error ? (error as { cause: unknown }).cause : undefined;
-      const isTimeout = cause === TIMEOUT_REASON;
-      return {
-        success: false,
-        error: isTimeout ? "MiMo API 请求超时" : "请求被取消",
-      };
-    }
-
-    return { success: false, error: `MiMo API 请求异常: ${error.message}` };
-  }
+/** 构造网页内容分析的对话消息 */
+function buildAiMessages(markdown: string, prompt: string): MimoRequestBody["messages"] {
+  return [
+    {
+      role: "system",
+      content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
+    },
+    {
+      role: "user",
+      content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
+    },
+  ];
 }
 
 // ── 主函数 ─────────────────────────────────────────────
@@ -159,13 +72,30 @@ async function callMimoApi(
  * 5. 无 prompt -> 返回 Markdown
  * 6. 有 prompt -> 调用 MiMo API 进行 AI 分析
  */
+/** 抓取执行函数签名（工厂返回类型） */
+export type ExecuteFetch = (
+  params: FetchParams,
+  signal?: AbortSignal,
+  reqId?: string,
+  reporter?: ProgressReporter,
+) => Promise<CallToolResult>;
+
+/**
+ * 抓取工厂：由 composition root（createServer）注入配置
+ * 返回的函数与原 executeFetch 调用方式一致
+ */
+export function createExecuteFetch(config: AppConfig): ExecuteFetch {
+  return (params, signal, reqId, reporter) => executeFetch(config, params, signal, reqId, reporter);
+}
+
 export async function executeFetch(
+  config: AppConfig,
   params: FetchParams,
   signal?: AbortSignal,
   reqId: string = randomUUID(),
   reporter?: ProgressReporter,
 ): Promise<CallToolResult> {
-  const log = logger.withReqId(reqId);
+  const log = createLogger(config.logLevel).withReqId(reqId);
   const { url, prompt, clean, maxLength } = params;
 
   // ── 1. URL 验证 ──
@@ -180,7 +110,7 @@ export async function executeFetch(
   // ── 2. 抓取网页 ──
   log.info(`开始抓取: ${redactUrl(url)}`);
   await reporter?.report(0, "正在抓取网页...");
-  const result = await fetchPage(url, { signal });
+  const result = await fetchPage(url, { signal, config });
 
   if (result.error) {
     log.error(`抓取失败: ${result.error}`);
@@ -207,7 +137,9 @@ export async function executeFetch(
   // ── 4. HTML -> Markdown ──
   log.info("开始 HTML 转 Markdown...");
   await reporter?.report(33, "正在提取正文...");
-  let markdown = htmlToMarkdown(result.content, { clean, maxLength });
+  // 转换层不预先截断（maxLength 由 fetch-tool 在真实长度上统一判定：
+  // fits 直接返回 / 超长走自动摘要 / 失败或关闭时 handleOverflow 单次截断）
+  let markdown = htmlToMarkdown(result.content, { clean, maxLength: Number.MAX_SAFE_INTEGER, logger: log });
   log.info(`Markdown 转换完成，长度: ${markdown.length}`);
 
   // ── 4.1 SPA 降级检测 ──
@@ -216,10 +148,15 @@ export async function executeFetch(
     await reporter?.report(50, "检测到 SPA，正在渲染...");
     if (config.enableBrowser) {
       log.info("启用浏览器渲染降级...");
-      const rendered = await renderWithBrowser(url);
+      const rendered = await renderWithBrowser(url, config.fetchTimeout, signal, config);
+      // 请求已被取消 → 不把"渲染失败:已取消"拼进 markdown，直接返回
+      if (signal?.aborted) {
+        log.info("请求已取消，跳过后续处理");
+        return { content: [{ type: "text", text: "请求已取消" }], isError: true };
+      }
       if (rendered.success && rendered.html) {
         // 用渲染后的 HTML 重新提取 Markdown
-        markdown = htmlToMarkdown(rendered.html, { clean, maxLength });
+        markdown = htmlToMarkdown(rendered.html, { clean, maxLength: Number.MAX_SAFE_INTEGER, logger: log });
         log.info(`浏览器渲染后 Markdown 长度: ${markdown.length}`);
       } else {
         log.warn(`浏览器渲染失败: ${rendered.error}`);
@@ -252,7 +189,16 @@ export async function executeFetch(
       // 使用语义边界截断，避免在段落/句子中间切断
       const SUMMARY_INPUT_LIMIT = 100_000;
       const contentForSummary = truncateMarkdown(markdown, SUMMARY_INPUT_LIMIT);
-      const aiResult = await callMimoApi(contentForSummary, summaryPrompt, signal, reqId);
+      let aiResult: AiResult;
+      try {
+        log.info("调用 MiMo API 进行内容分析...");
+        const r = await chatCompletion(buildAiMessages(contentForSummary, summaryPrompt), { signal, reqId, config });
+        aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
+      } catch (err) {
+        // chatCompletion 重新抛出的网络错误（ECONNRESET、ECONNREFUSED 等）→ 走下方回退
+        const error = err instanceof Error ? err : new Error(String(err));
+        aiResult = { success: false, error: `MiMo API 请求异常: ${error.message}` };
+      }
 
       if (aiResult.success) {
         log.info(`自动摘要完成，长度: ${aiResult.content.length}`);
@@ -283,7 +229,20 @@ export async function executeFetch(
   // ── 6. 有 prompt -> 调用 MiMo API ──
   log.info(`开始 AI 分析，prompt: ${prompt.substring(0, 50)}...`);
   await reporter?.report(83, "正在 AI 分析...");
-  const aiResult = await callMimoApi(markdown, prompt, signal, reqId);
+  // AI 输入显式收界到 maxLength（转换层不再隐式截断，防止超长页面打爆 context）
+  const contentForAi = truncateMarkdown(markdown, maxLength);
+  let aiResult: AiResult;
+  try {
+    const r = await chatCompletion(buildAiMessages(contentForAi, prompt), { signal, reqId, config });
+    aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
+    if (aiResult.success) {
+      log.info(`AI 分析完成，内容长度: ${aiResult.content.length}`);
+    }
+  } catch (err) {
+    // chatCompletion 重新抛出的网络错误 → 映射为 failure，走下方 fallback 返回原始 Markdown
+    const error = err instanceof Error ? err : new Error(String(err));
+    aiResult = { success: false, error: `MiMo API 请求异常: ${error.message}` };
+  }
 
   if (!aiResult.success) {
     // AI 分析失败 -> 返回错误 + 原始 Markdown 作为 fallback（经过 overflow 保护）

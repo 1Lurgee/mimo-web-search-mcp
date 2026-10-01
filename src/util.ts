@@ -2,8 +2,6 @@
 
 import { loadConfig } from "./config.js";
 
-const config = loadConfig();
-
 // ── AbortSignal 工具 ───────────────────────────────────
 
 /**
@@ -31,10 +29,11 @@ export function mergeAbortSignals(...signals: (AbortSignal | null | undefined)[]
  * 计算带 jitter 的重试延迟（指数退避 + 随机抖动）
  * 避免多个实例同时重试造成请求洪峰（惊群效应）
  * @param attempt - 当前重试次数（从 0 开始）
+ * @param retryDelayMs - 基础延迟（默认参数惰性读取配置，生产调用方应显式传入）
  * @returns 延迟毫秒数
  */
-export function calculateRetryDelay(attempt: number): number {
-  const exponentialDelay = config.retryDelay * Math.pow(2, attempt);
+export function calculateRetryDelay(attempt: number, retryDelayMs: number = loadConfig().retryDelay): number {
+  const exponentialDelay = retryDelayMs * Math.pow(2, attempt);
   const jitter = Math.random() * exponentialDelay * 0.5; // 0 ~ 50% 的随机抖动
   return exponentialDelay + jitter;
 }
@@ -48,13 +47,13 @@ export const TIMEOUT_REASON = "request_timeout";
  * 创建超时的 fetch 请求，支持外部 AbortSignal（MCP client 取消时中止请求）
  * @param url - 请求 URL
  * @param options - fetch 选项
- * @param timeoutMs - 超时时间（毫秒），默认从配置读取
+ * @param timeoutMs - 超时时间（毫秒），默认参数惰性读取配置（生产调用方应显式传入）
  * @param externalSignal - 来自 MCP SDK 的请求级取消信号
  */
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit,
-  timeoutMs: number = config.requestTimeout,
+  timeoutMs: number = loadConfig().requestTimeout,
   externalSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutController = new AbortController();
@@ -104,13 +103,20 @@ export function truncateMarkdown(text: string, maxLength: number): string {
   // 无合适边界，硬截断
   const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
 
-  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
-  // 始终检查末尾是否有未闭合的 [（即使文本中包含其他完整链接）
+  // 修复截断可能破坏的 Markdown 链接
+  // 情况 1：末尾未闭合的 [（如 "[text" 被切断）→ 移除该 [ 及其后的内容
   const lastOpen = base.lastIndexOf("[");
   const lastClose = base.lastIndexOf("]");
   if (lastOpen > lastClose) {
-    // 最后一个 [ 没有对应的 ]，说明被截断了，移除该 [ 及其后的内容
     return base.substring(0, lastOpen).trimEnd() + truncationNotice;
+  }
+
+  // 情况 2：]( 之后的 URL 的 ")" 被截断（如 "](https://…/pa"）→ 移除整个残缺链接
+  // 注意："](" 必然是 Markdown 链接语法，括号后的普通散文不会误伤
+  const linkMark = base.lastIndexOf("](");
+  if (linkMark !== -1 && base.indexOf(")", linkMark + 1) === -1) {
+    // linkMark 是 "]"，其对应的 "[" 在 linkMark - 1
+    return base.substring(0, linkMark - 1).trimEnd() + truncationNotice;
   }
 
   return base + truncationNotice;

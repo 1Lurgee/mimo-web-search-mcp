@@ -103,7 +103,7 @@ build/
 out/
 
 # Package manager artifacts
-package-lock.json
+# package-lock.json 必须提交，CI 使用 npm ci 保证可复现安装
 yarn.lock
 pnpm-lock.yaml
 

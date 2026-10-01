@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
+import type { AppConfig } from "../src/config.js";
 
 // ── Mock MCP SDK ──────────────────────────────────────
 // 捕获 server.tool() 注册的工具处理器
@@ -30,19 +31,34 @@ function callHandler(args: Record<string, unknown>, signal?: AbortSignal) {
   return handler(args, { signal: signal ?? new AbortController().signal });
 }
 
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-  StdioServerTransport: class {
-    async close() {}
-  },
-}));
-
-// ── 设置环境变量（模块顶层代码需要）──────────────────
-process.env.MIMO_API_KEY = "test-api-key";
-
 // ── 导入被测模块 ──────────────────────────────────────
-// 动态导入，确保 mock 生效后再加载
-const { default: _mod } = await import("../src/index.js");
-// index.ts 是副作用模块，导入即执行，handler 已被捕获
+// 动态导入，确保 mock 生效后再加载；config 经工厂注入，不再依赖 import 前置环境变量
+const { createServer } = await import("../src/server.js");
+
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2, // 重试测试依赖
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760,
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
+
+createServer(TEST_CONFIG); // 注册工具，handler 已被捕获
 
 // ── 辅助函数 ─────────────────────────────────────────
 
@@ -182,7 +198,7 @@ describe("mimo_web_search 工具", () => {
     expect(result.content[0].text).not.toContain("Sources");
   });
 
-  it("空内容显示 (no content)", async () => {
+  it("空内容返回错误", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetchJson(200, {
@@ -196,9 +212,10 @@ describe("mimo_web_search 工具", () => {
       max_keyword: 3,
       limit: 5,
       force_search: true,
-    })) as { content: Array<{ text: string }> };
+    })) as { content: Array<{ text: string }>; isError?: boolean };
 
-    expect(result.content[0].text).toContain("(no content)");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("空响应");
   });
 
   // ── 请求参数构造 ─────────────────────────────────
@@ -227,7 +244,7 @@ describe("mimo_web_search 工具", () => {
     expect(options.headers["api-key"]).toBe("test-api-key");
 
     const body = JSON.parse(options.body);
-    expect(body.model).toBe("mimo-v2.5");
+    expect(body.model).toBe(TEST_CONFIG.model);
     expect(body.messages[0].content).toBe("搜索词");
     expect(body.tools[0].type).toBe("web_search");
     expect(body.tools[0].max_keyword).toBe(5);
@@ -554,7 +571,7 @@ describe("mimo_web_search 工具", () => {
     })) as { isError: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("No response received");
+    expect(result.content[0].text).toContain("空响应");
   });
 
   it("无 choices 字段返回错误", async () => {
@@ -594,10 +611,13 @@ describe("mimo_web_search 工具", () => {
   });
 
   it("截断不产生悬挂的 Markdown 链接语法", async () => {
-    // 构造在截断点附近有 Markdown 链接的内容
-    // 填充内容使截断点恰好落在链接的 [title](url) 中间
-    const padding = "word ".repeat(25000); // ~125000 chars，超过 maxContentLength
-    const contentWithLink = padding + "Check [this important link](https://example.com/very/long/path) for details.";
+    // 构造截断点恰好落在 Markdown 链接中间的内容
+    // padding1(~99970) + link(76) + padding2 → 截断点 100000 落在链接 URL 内部
+    // 无语义边界可用时 truncateMarkdown 硬截断，随后修复逻辑应整段移除残缺链接
+    const padding1 = "word ".repeat(19994); // ~99970 chars
+    const link = "Check [this important link](https://example.com/very/long/path) for details."; // 76 chars
+    const padding2 = "word ".repeat(5000);
+    const contentWithLink = padding1 + link + padding2;
     vi.stubGlobal(
       "fetch",
       mockFetchJson(200, {
@@ -614,12 +634,13 @@ describe("mimo_web_search 工具", () => {
     })) as { content: Array<{ text: string }> };
 
     const text = result.content[0].text;
-    // 不应包含不完整的链接语法：[text 后面没有 ](
-    const incompleteLink = /\[[^\]]*\n/.exec(text);
-    // 核心断言：截断后的文本中不应出现悬挂的 [ 没有对应 ](
-    const openBrackets = (text.match(/\[/g) ?? []).length;
-    const closeBrackets = (text.match(/\]/g) ?? []).length;
-    expect(openBrackets).toBeLessThanOrEqual(closeBrackets + 1); // 允许截断通知的 [Content truncated...]
+    // 核心断言 1：不存在「]( 后面找不到 )」的残缺链接（URL 被切断）
+    expect(/\]\((?![^\)]*\))/.test(text)).toBe(false);
+    // 核心断言 2：残缺链接应被整段移除，而非留下半截
+    expect(text).not.toContain("[this important link");
+    expect(text).not.toContain("](https://example.com");
+    // 截断通知仍然存在
+    expect(text).toContain("Content truncated");
   });
 
   // ── MCP Client 取消信号 ────────────────────────────

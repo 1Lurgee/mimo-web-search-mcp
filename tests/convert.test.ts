@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
 
-// ── 设置环境变量（convert.ts 模块顶层 loadConfig 需要）──
-process.env.MIMO_API_KEY = "test-api-key";
-
 const { htmlToMarkdown } = await import("../src/convert.js");
 
 // ── 辅助：构造完整 HTML 文档 ───────────────────────────

@@ -1,41 +1,84 @@
 import { describe, it, expect, vi } from "vitest";
+import type { AppConfig } from "../src/config.js";
 
-// ── Mock 配置和日志模块 ──────────────────────────────
-vi.mock("../src/config.js", () => ({
-  loadConfig: () => ({
-    apiKey: "test-api-key",
-    baseUrl: "https://api.xiaomimimo.com/v1",
-    model: "mimo-v2.5-pro",
-    requestTimeout: 60000,
-    maxCompletionTokens: 1024,
-    temperature: 0.3,
-    topP: 0.95,
-    thinking: false,
-    logLevel: 0,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
-    defaultMaxKeyword: 3,
-    defaultLimit: 5,
-    maxQueryLength: 10000,
-    maxFetchSize: 10485760,
-    fetchTimeout: 30000,
-    enableBrowser: false,
-    autoSummary: true,
-  }),
+// config/logger 已在调用时求值，测试经参数注入，无需 mock
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2,
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760,
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
+
+const { isSpaPage, renderWithBrowser } = await import("../src/render.js");
+
+// ── renderWithBrowser 取消测试 ────────────────────────
+
+const pw = vi.hoisted(() => ({
+  close: vi.fn(async () => {}),
+  goto: vi.fn(() => new Promise<Response>(() => {})),
+  waitForTimeout: vi.fn(async () => {}),
+  content: vi.fn(async () => "<html></html>"),
+  isConnected: vi.fn(() => true),
 }));
 
-vi.mock("../src/logger.js", () => ({
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+vi.mock("playwright", () => ({
+  chromium: {
+    launch: vi.fn(async () => ({
+      isConnected: pw.isConnected,
+      newPage: vi.fn(async () => ({
+        goto: pw.goto,
+        waitForTimeout: pw.waitForTimeout,
+        content: pw.content,
+        close: pw.close,
+      })),
+    })),
+  },
 }));
 
-const { isSpaPage } = await import("../src/render.js");
+describe("renderWithBrowser 取消", () => {
+  it("signal 预先已中止 -> 不加载 playwright，直接返回取消", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await renderWithBrowser("https://example.com", 5000, controller.signal);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("已取消");
+    // 预先中止发生在动态 import 之前：不应启动浏览器
+    expect(pw.goto).not.toHaveBeenCalled();
+  });
+
+  it("goto 进行中 abort -> 快速返回取消且 page.close 被调用", async () => {
+    pw.goto.mockImplementationOnce(() => new Promise<Response>(() => {})); // 永不 resolve
+    const controller = new AbortController();
+
+    const pending = renderWithBrowser("https://example.com", 5000, controller.signal, TEST_CONFIG);
+    // 等 goto 真正开始（launch + newPage 均为 async）
+    await vi.waitFor(() => expect(pw.goto).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    const result = await pending;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("已取消");
+    expect(pw.close).toHaveBeenCalled();
+  });
+});
 
 // ── isSpaPage 测试 ────────────────────────────────────
 

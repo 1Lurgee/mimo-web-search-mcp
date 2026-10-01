@@ -1,16 +1,15 @@
 /** 网页抓取模块 - HTTP fetch 用于获取网页内容 */
 
 import os from "node:os";
-import { loadConfig } from "./config.js";
+import { loadConfig, type AppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { validateUrl, isPermittedRedirect, redactUrl, isLocalOrPrivateHostname } from "./ssrf.js";
 import { mergeAbortSignals, TIMEOUT_REASON } from "./util.js";
 import { globalFetchCache } from "./cache.js";
+import { detectCharset, hasGbkSupport } from "./charset.js";
+import { isBinaryContentType, streamToLimitedBuffer } from "./stream.js";
 
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
+// ── 配置/日志在调用时求值（见 FetchPageOptions.config）──
 
 // ── 动态 User-Agent（防止 WAF 拦截）──────────────────
 
@@ -73,6 +72,8 @@ export interface FetchPageOptions {
   maxSize?: number;
   /** 请求超时时间（毫秒），默认从配置读取 */
   timeout?: number;
+  /** 配置注入（默认惰性 loadConfig；由调用方传入以免 import 时读取环境） */
+  config?: AppConfig;
 }
 
 /** fetchPage 返回结果 */
@@ -92,210 +93,13 @@ export interface FetchPageResult {
 }
 
 // ── URL 校验（核心逻辑已抽至 ./ssrf.ts；本地部署简化策略）──
-
-// ── 编码检测 ──────────────────────────────────────────
-
-/**
- * 模块装载时探测 Node ICU 是否支持 GBK 编码
- * Node 20 默认 small-icu 可能不含 GBK；Node 22+ 通常包含 full-icu
- * 此标志用于在解码失败时给出更友好的提示
- */
-let _hasGbk = true;
-try {
-  new TextDecoder("gbk");
-} catch {
-  _hasGbk = false;
-}
-
-/**
- * 从二进制数据开头嗅探 BOM（Byte Order Mark）
- * BOM 优先级最高，因为它直接来自文件内容，比 header/meta 更可靠
- */
-function detectBom(buffer: ArrayBuffer): string | null {
-  const bytes = new Uint8Array(buffer.slice(0, 4));
-  // UTF-8 BOM: EF BB BF
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
-  // UTF-32 LE BOM: FF FE 00 00（必须在 UTF-16 LE 之前检查，因为前缀相同）
-  if (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00) return "utf-32le";
-  // UTF-32 BE BOM: 00 00 FE FF（必须在 UTF-16 BE 之前检查，因为后缀相同）
-  if (bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff) return "utf-32be";
-  // UTF-16 LE BOM: FF FE
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
-  // UTF-16 BE BOM: FE FF
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-  return null;
-}
-
-/**
- * 从 HTML 内容中检测字符编码
- * 按优先级依次检查：
- * 1. <meta charset="...">
- * 2. <meta http-equiv="Content-Type" content="...; charset=...">
- * 仅检查前 1024 字节以提高性能
- */
-function detectCharsetFromHtml(buffer: ArrayBuffer): string | null {
-  // 取前 1024 字节用 ASCII 兼容编码解码，足以覆盖 <head> 中的 meta 标签
-  const head = new TextDecoder("ascii").decode(buffer.slice(0, 1024));
-
-  // 匹配 <meta charset="utf-8"> 或 <meta charset='utf-8'>
-  const charsetMatch = head.match(/<meta[^>]+charset=["']?\s*([a-zA-Z0-9_-]+)/i);
-  if (charsetMatch) {
-    return charsetMatch[1].trim().toLowerCase();
-  }
-
-  // 匹配 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-  const httpEquivMatch = head.match(
-    /<meta[^>]+http-equiv=["']Content-Type["'][^>]+content=["'][^"']*charset=([a-zA-Z0-9_-]+)/i,
-  );
-  if (httpEquivMatch) {
-    return httpEquivMatch[1].trim().toLowerCase();
-  }
-
-  return null;
-}
-
-/**
- * 检测响应内容的字符编码
- * 按优先级：BOM -> Content-Type header -> HTML meta 标签 -> 默认 UTF-8
- */
-export function detectCharset(buffer: ArrayBuffer, contentTypeHeader: string | null): string {
-  // 1. BOM 嗅探（最高优先级，直接来自文件内容）
-  const bomCharset = detectBom(buffer);
-  if (bomCharset) {
-    return bomCharset;
-  }
-
-  // 2. 从 Content-Type 头解析 charset
-  if (contentTypeHeader) {
-    const charsetMatch = contentTypeHeader.match(/charset=([a-zA-Z0-9_-]+)/i);
-    if (charsetMatch) {
-      return charsetMatch[1].trim().toLowerCase();
-    }
-  }
-
-  // 3. 从 HTML meta 标签检测
-  const htmlCharset = detectCharsetFromHtml(buffer);
-  if (htmlCharset) {
-    return htmlCharset;
-  }
-
-  // 4. 默认 UTF-8
-  return "utf-8";
-}
-
-/**
- * 获取当前 Node ICU 是否支持 GBK 编码
- * 用于在解码失败时给出友好提示
- */
-export function hasGbkSupport(): boolean {
-  return _hasGbk;
-}
+// ── 编码检测已抽至 ./charset.ts ──────────────────────
+// ── 流式读取 / 二进制检测已抽至 ./stream.ts ──────────
 
 // ── HTTP 请求（mergeAbortSignals 已迁移至 ./util.ts）──
 
 /** 最大重定向次数，防止无限重定向循环（对齐 Claude Code，匹配常见客户端默认值） */
 const MAX_REDIRECTS = 10;
-
-/**
- * 检测是否为二进制内容类型（对齐 Claude Code 白名单策略）
- *
- * 采用白名单而非黑名单：默认认为所有类型都是二进制的，只排除已知的文本类型。
- * 黑名单策略的问题：永远无法穷举所有二进制类型（application/wasm、font/woff 等），
- * 未知类型会被当文本解码产生乱码并浪费 token。
- *
- * 先用 split(';')[0] 剥离 charset 等参数，只比较主 MIME 类型。
- */
-function isBinaryContentType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const mt = (contentType.split(";")[0] ?? "").trim().toLowerCase();
-  if (mt.startsWith("text/")) return false;
-  if (mt.endsWith("+json") || mt === "application/json") return false;
-  if (mt.endsWith("+xml") || mt === "application/xml") return false;
-  if (mt.startsWith("application/javascript")) return false;
-  if (mt === "application/x-www-form-urlencoded") return false;
-  return true;
-}
-
-/**
- * 将 abort 规范为 AbortError，并尽量保留 signal.reason（如 TIMEOUT_REASON）。
- * Node/undici 在 signal abort 时，fetch 拒绝的 AbortError.cause 往往就是 reason。
- */
-function abortErrorFromSignal(signal?: AbortSignal): DOMException {
-  const err = new DOMException("The operation was aborted.", "AbortError");
-  const reason = signal?.reason;
-  if (reason !== undefined) {
-    Object.defineProperty(err, "cause", { value: reason, configurable: true });
-  }
-  return err;
-}
-
-/**
- * 流式读取响应体，限制最大字节数以防止 OOM。
- * 当累计达到 maxSize 即提前终止，返回截断后的内容。
- * signal 中止时必须抛出 AbortError（不可静默返回半截数据，否则会被缓存）。
- */
-async function streamToLimitedBuffer(
-  body: ReadableStream<Uint8Array> | null,
-  maxSize: number,
-  signal?: AbortSignal,
-): Promise<ArrayBuffer> {
-  if (!body) return new ArrayBuffer(0);
-  if (signal?.aborted) throw abortErrorFromSignal(signal);
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalSize = 0;
-
-  try {
-    while (true) {
-      // 中止必须抛错：静默 break 会被上层当成成功 200 并写入缓存
-      if (signal?.aborted) throw abortErrorFromSignal(signal);
-
-      let done: boolean;
-      let value: Uint8Array | undefined;
-      try {
-        ({ done, value } = await reader.read());
-      } catch (readErr) {
-        // 底层流因 abort/cancel 失败时，优先表现为 AbortError
-        if (signal?.aborted) throw abortErrorFromSignal(signal);
-        throw readErr;
-      }
-
-      // read() 等待期间可能已 abort；即便 done=true 也不能当成功半截内容
-      if (signal?.aborted) throw abortErrorFromSignal(signal);
-
-      if (done || !value) break;
-
-      const remaining = maxSize - totalSize;
-      if (remaining <= 0) {
-        // 已达上限，丢弃剩余数据（截断成功，非错误）
-        break;
-      }
-
-      if (value.byteLength <= remaining) {
-        chunks.push(value);
-        totalSize += value.byteLength;
-      } else {
-        // 只截取到 maxSize 的部分
-        chunks.push(value.slice(0, remaining));
-        totalSize += remaining;
-        break;
-      }
-    }
-  } finally {
-    // 确保 reader 释放（取消底层流）
-    await reader.cancel().catch(() => "");
-  }
-
-  // 合并 chunks 为单个 ArrayBuffer
-  const result = new Uint8Array(totalSize);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return result.buffer;
-}
 
 /**
  * 内部实现：执行单次 HTTP 请求并处理响应
@@ -306,8 +110,9 @@ async function fetchPageInternal(
   options: FetchPageOptions,
   redirectCount: number,
 ): Promise<FetchPageResult> {
-  const { signal, maxSize = config.maxFetchSize, timeout = config.fetchTimeout } = options;
-  const log = logger;
+  const cfg = options.config ?? loadConfig();
+  const log = createLogger(cfg.logLevel);
+  const { signal, maxSize = cfg.maxFetchSize, timeout = cfg.fetchTimeout } = options;
 
   // URL 基础验证（协议 / 格式 / 长度；本地部署允许私有 IP 与任意端口）
   const validation = validateUrl(url);
@@ -478,7 +283,7 @@ async function fetchPageInternal(
     } catch {
       // 编码不支持时回退到 UTF-8，对 GBK 给出更友好的提示
       if (charset.includes("gbk") || charset.includes("gb2312") || charset.includes("gb18030")) {
-        if (!_hasGbk) {
+        if (!hasGbkSupport()) {
           log.warn(
             `编码 "${charset}" 不被当前 Node.js 版本支持（需要 full-icu）。` +
             `建议升级到 Node.js 22+ 或安装 full-icu 包。回退到 UTF-8（可能产生乱码）。`,
@@ -576,16 +381,19 @@ async function fetchPageInternal(
  * - 错误返回结果对象而非抛出异常（编程错误除外）
  */
 export async function fetchPage(url: string, options: FetchPageOptions = {}): Promise<FetchPageResult> {
+  const log = createLogger((options.config ?? loadConfig()).logLevel);
+
   // 检查缓存
   const cached = globalFetchCache.get(url);
   if (cached) {
+    log.debug(`缓存命中: ${redactUrl(url)}`);
     return cached;
   }
 
   // 检查是否有相同 URL 的进行中请求（去重）
   const inflight = inflightRequests.get(url);
   if (inflight) {
-    logger.debug(`复用进行中的请求: ${redactUrl(url)}`);
+    log.debug(`复用进行中的请求: ${redactUrl(url)}`);
     return inflight;
   }
 
@@ -599,6 +407,7 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
     // 成功结果存入缓存（错误不缓存）
     if (!result.error) {
       globalFetchCache.set(url, result);
+      log.debug(`缓存写入: ${redactUrl(url)} (${result.size} 字节)`);
     }
 
     return result;

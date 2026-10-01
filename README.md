@@ -22,17 +22,9 @@
 
 ## 快速开始
 
-### 方式 1：npm 全局安装（推荐）
+> **安装方式**：仅提供源码安装。npm 渠道（`npm install -g` / `npx`）后续不再提供与更新。
 
-```bash
-# 全局安装
-npm install -g mimo-web-search-mcp
-
-# 或直接运行（无需安装）
-npx mimo-web-search-mcp
-```
-
-### 方式 2：从源码安装
+### 从源码安装
 
 ```bash
 # 克隆并安装
@@ -45,24 +37,6 @@ npm run build
 ### Claude Code 配置
 
 编辑 `~/.claude.json` 文件（Windows: `%USERPROFILE%\.claude.json`）：
-
-#### 使用 npm 全局安装（推荐）
-
-```json
-{
-  "mcpServers": {
-    "mimo-web-search": {
-      "command": "npx",
-      "args": ["mimo-web-search-mcp"],
-      "env": {
-        "MIMO_API_KEY": "your-api-key-here"
-      }
-    }
-  }
-}
-```
-
-#### 使用源码安装
 
 ```json
 {
@@ -121,7 +95,7 @@ Claude: [自动调用 mimo_web_fetch 抓取网页内容]
 | 变量                    | 说明                                        | 默认值                           |
 | ----------------------- | ------------------------------------------- | -------------------------------- |
 | `MIMO_BASE_URL`         | API 基础 URL                                | `https://api.xiaomimimo.com/v1` |
-| `MIMO_MODEL`            | 模型名称（如 `mimo-v2.5`、`mimo-v2.5-pro`） | `mimo-v2.5`                      |
+| `MIMO_MODEL`            | 模型名称（如 `mimo-v2.6-flash`、`mimo-v2.5-pro`） | `mimo-v2.6-flash`           |
 | `MIMO_THINKING`         | 启用思考模式                                | `false`                          |
 | `MIMO_AUTO_SUMMARY`     | 超长内容自动摘要                            | `true`                           |
 | `MIMO_ENABLE_BROWSER`   | 启用浏览器渲染（SPA 降级）                  | `false`                          |

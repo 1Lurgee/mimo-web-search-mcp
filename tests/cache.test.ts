@@ -1,48 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// mock config 和 logger 必须在 import 之前
-vi.mock("../src/config.js", () => ({
-  loadConfig: () => ({
-    apiKey: "test",
-    baseUrl: "https://test.com",
-    model: "mimo-v2.5-pro",
-    requestTimeout: 60000,
-    maxCompletionTokens: 5120,
-    temperature: 0.4,
-    topP: 0.95,
-    thinking: false,
-    logLevel: 0,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
-    defaultMaxKeyword: 3,
-    defaultLimit: 5,
-    maxQueryLength: 10000,
-    maxFetchSize: 10485760,
-    fetchTimeout: 30000,
-    enableBrowser: false,
-    autoSummary: true,
-  }),
-}));
-
-vi.mock("../src/logger.js", () => ({
-  createLogger: () => ({
-    error: vi.fn(),
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-    isDebugEnabled: () => false,
-    withReqId: () => ({
-      error: vi.fn(),
-      warn: vi.fn(),
-      info: vi.fn(),
-      debug: vi.fn(),
-      isDebugEnabled: () => false,
-    }),
-  }),
-}));
-
+// cache.ts 已纯化（零 config/logger 依赖），无需 mock
 import { globalFetchCache } from "../src/cache.js";
 import type { FetchPageResult } from "../src/fetch.js";
 

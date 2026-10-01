@@ -3,14 +3,12 @@
 import { parseHTML } from "linkedom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
-import { loadConfig } from "./config.js";
-import { createLogger } from "./logger.js";
+import { LogLevel } from "./config.js";
+import { createLogger, type Logger } from "./logger.js";
 import { truncateMarkdown } from "./util.js";
 
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
+// import 安全的默认日志器（不读环境变量）；生产调用方通过 ConvertOptions.logger 注入带 reqId 的日志器
+const DEFAULT_LOGGER: Logger = createLogger(LogLevel.ERROR);
 
 // ── Base64 Data URI 剥离 ──────────────────────────────
 
@@ -108,6 +106,8 @@ export interface ConvertOptions {
   clean?: boolean;
   /** 输出最大字符数（默认 50000） */
   maxLength?: number;
+  /** 日志器（默认仅 ERROR 级；生产由调用方注入） */
+  logger?: Logger;
 }
 
 // ── Turndown 配置 ─────────────────────────────────────
@@ -176,13 +176,13 @@ function convertHtmlToMd(html: string): string {
  * @returns Markdown 文本
  */
 export function htmlToMarkdown(html: string, options?: ConvertOptions): string {
-  const { clean = true, maxLength = 50000 } = options ?? {};
+  const { clean = true, maxLength = 50000, logger = DEFAULT_LOGGER } = options ?? {};
 
   logger.debug(`开始 HTML 转 Markdown，clean=${clean}, 输入长度=${html.length}`);
 
   let markdown: string;
   if (clean) {
-    markdown = cleanConvert(html, maxLength);
+    markdown = cleanConvert(html, maxLength, logger);
   } else {
     markdown = rawConvert(html, maxLength);
   }
@@ -196,7 +196,7 @@ export function htmlToMarkdown(html: string, options?: ConvertOptions): string {
 /**
  * Clean 模式：Readability 提取 + 三级降级策略
  */
-function cleanConvert(html: string, maxLength: number): string {
+function cleanConvert(html: string, maxLength: number, logger: Logger): string {
   const { document } = parseHTML(html);
 
   // ── 第一级：Readability 提取正文 ──
