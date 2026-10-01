@@ -22,17 +22,9 @@
 
 ## 快速开始
 
-### 方式 1：npm 全局安装（推荐）
+> **安装方式**：仅提供源码安装。npm 渠道（`npm install -g` / `npx`）后续不再提供与更新。
 
-```bash
-# 全局安装
-npm install -g mimo-web-search-mcp
-
-# 或直接运行（无需安装）
-npx mimo-web-search-mcp
-```
-
-### 方式 2：从源码安装
+### 从源码安装
 
 ```bash
 # 克隆并安装
@@ -45,24 +37,6 @@ npm run build
 ### Claude Code 配置
 
 编辑 `~/.claude.json` 文件（Windows: `%USERPROFILE%\.claude.json`）：
-
-#### 使用 npm 全局安装（推荐）
-
-```json
-{
-  "mcpServers": {
-    "mimo-web-search": {
-      "command": "npx",
-      "args": ["mimo-web-search-mcp"],
-      "env": {
-        "MIMO_API_KEY": "your-api-key-here"
-      }
-    }
-  }
-}
-```
-
-#### 使用源码安装
 
 ```json
 {
