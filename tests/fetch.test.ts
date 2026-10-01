@@ -41,7 +41,8 @@ vi.mock("../src/logger.js", () => ({
 }));
 
 // ── 导入被测模块 ──────────────────────────────────────
-const { detectCharset, fetchPage } = await import("../src/fetch.js");
+const { fetchPage } = await import("../src/fetch.js");
+const { detectCharset } = await import("../src/charset.js");
 const { globalFetchCache } = await import("../src/cache.js");
 
 // ── 辅助函数 ─────────────────────────────────────────

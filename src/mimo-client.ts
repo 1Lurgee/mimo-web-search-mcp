@@ -9,7 +9,6 @@
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { fetchWithTimeout, TIMEOUT_REASON } from "./util.js";
-import { emit401, type ToolConsumer } from "./attribution.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
@@ -85,6 +84,9 @@ export interface MimoRequestBody {
   stream: boolean;
   thinking: { type: "enabled" | "disabled" };
 }
+
+/** 401 归因的调用方标识 */
+export type ToolConsumer = "WebSearch" | "WebFetch" | "MiMoAPI";
 
 /** API 调用选项 */
 export interface ChatCompletionOptions {
@@ -186,9 +188,9 @@ export async function chatCompletion(
 
     if (!resp.ok) {
       const errorBody = await resp.text().catch(() => "");
-      // 记录 401 认证失败归因事件（与历史行为一致：仅 401，不含 403）
+      // 401 认证失败归因日志（与历史行为一致：仅 401，不含 403）
       if (resp.status === 401) {
-        emit401(consumer, config.apiKey, {
+        log.warn(`API 401 认证失败: consumer=${consumer}`, {
           status: resp.status,
           ...(attempt !== undefined && { attempt }),
         });

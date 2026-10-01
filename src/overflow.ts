@@ -18,8 +18,6 @@ const logger = createLogger(config);
 export interface OverflowResult {
   /** 内联内容（可能被截断） */
   content: string;
-  /** 内容是否被截断 */
-  wasTruncated: boolean;
 }
 
 // ── 溢出处理 ──────────────────────────────────────────
@@ -38,17 +36,11 @@ export async function handleOverflow(
 ): Promise<OverflowResult> {
   // 内容长度在限制内，直接返回
   if (content.length <= maxLength) {
-    return {
-      content,
-      wasTruncated: false,
-    };
+    return { content };
   }
 
   logger.info(`内容溢出: ${content.length} 字符 > ${maxLength} 字符限制`);
 
   // 使用共享的语义边界截断（含 Markdown 链接修复）
-  return {
-    content: truncateMarkdown(content, maxLength),
-    wasTruncated: true,
-  };
+  return { content: truncateMarkdown(content, maxLength) };
 }

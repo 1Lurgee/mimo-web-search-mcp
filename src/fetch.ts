@@ -9,9 +9,6 @@ import { globalFetchCache } from "./cache.js";
 import { detectCharset, hasGbkSupport } from "./charset.js";
 import { isBinaryContentType, streamToLimitedBuffer } from "./stream.js";
 
-// 重新导出 charset 检测函数（保持向后兼容）
-export { detectCharset, hasGbkSupport } from "./charset.js";
-
 // ── 模块级单例 ────────────────────────────────────────
 
 const config = loadConfig();

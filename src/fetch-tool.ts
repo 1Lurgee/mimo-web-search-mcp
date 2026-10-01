@@ -11,7 +11,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { truncateMarkdown } from "./util.js";
 import { isSpaPage, renderWithBrowser, getSpaHint } from "./render.js";
 import { handleOverflow } from "./overflow.js";
-import { chatCompletion } from "./mimo-client.js";
+import { chatCompletion, type MimoRequestBody } from "./mimo-client.js";
 import type { ProgressReporter } from "./progress.js";
 
 // ── 模块级单例 ────────────────────────────────────────
@@ -45,47 +45,23 @@ function formatMetadataHeader(
   return header;
 }
 
-// ── AI 处理（通过 mimo-client.ts 统一调用）─────────────
+// ── AI 处理（直接调用 mimo-client.ts 的 chatCompletion）──
 
-/**
- * 调用 MiMo API 对抓取的 Markdown 内容进行 AI 分析
- * 使用 mimo-client.ts 的统一 chatCompletion 接口
- */
-async function callMimoApi(
-  markdown: string,
-  prompt: string,
-  signal?: AbortSignal,
-  reqId?: string,
-): Promise<{ success: true; content: string } | { success: false; error: string }> {
-  const log = reqId ? logger.withReqId(reqId) : logger;
-  log.info("调用 MiMo API 进行内容分析...");
+/** AI 处理结果：failure 只带 error 文案，调用方据此走 fallback */
+type AiResult = { success: true; content: string } | { success: false; error: string };
 
-  try {
-    const result = await chatCompletion(
-      [
-        {
-          role: "system",
-          content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
-        },
-        {
-          role: "user",
-          content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
-        },
-      ],
-      { signal, reqId },
-    );
-
-    if (result.success) {
-      log.info(`AI 分析完成，内容长度: ${result.content.length}`);
-      return { success: true, content: result.content };
-    }
-
-    return { success: false, error: result.error };
-  } catch (err) {
-    // chatCompletion 重新抛出的网络错误（ECONNRESET、ECONNREFUSED 等）
-    const error = err instanceof Error ? err : new Error(String(err));
-    return { success: false, error: `MiMo API 请求异常: ${error.message}` };
-  }
+/** 构造网页内容分析的对话消息 */
+function buildAiMessages(markdown: string, prompt: string): MimoRequestBody["messages"] {
+  return [
+    {
+      role: "system",
+      content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
+    },
+    {
+      role: "user",
+      content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
+    },
+  ];
 }
 
 // ── 主函数 ─────────────────────────────────────────────
@@ -194,7 +170,16 @@ export async function executeFetch(
       // 使用语义边界截断，避免在段落/句子中间切断
       const SUMMARY_INPUT_LIMIT = 100_000;
       const contentForSummary = truncateMarkdown(markdown, SUMMARY_INPUT_LIMIT);
-      const aiResult = await callMimoApi(contentForSummary, summaryPrompt, signal, reqId);
+      let aiResult: AiResult;
+      try {
+        log.info("调用 MiMo API 进行内容分析...");
+        const r = await chatCompletion(buildAiMessages(contentForSummary, summaryPrompt), { signal, reqId });
+        aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
+      } catch (err) {
+        // chatCompletion 重新抛出的网络错误（ECONNRESET、ECONNREFUSED 等）→ 走下方回退
+        const error = err instanceof Error ? err : new Error(String(err));
+        aiResult = { success: false, error: `MiMo API 请求异常: ${error.message}` };
+      }
 
       if (aiResult.success) {
         log.info(`自动摘要完成，长度: ${aiResult.content.length}`);
@@ -225,7 +210,18 @@ export async function executeFetch(
   // ── 6. 有 prompt -> 调用 MiMo API ──
   log.info(`开始 AI 分析，prompt: ${prompt.substring(0, 50)}...`);
   await reporter?.report(83, "正在 AI 分析...");
-  const aiResult = await callMimoApi(markdown, prompt, signal, reqId);
+  let aiResult: AiResult;
+  try {
+    const r = await chatCompletion(buildAiMessages(markdown, prompt), { signal, reqId });
+    aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
+    if (aiResult.success) {
+      log.info(`AI 分析完成，内容长度: ${aiResult.content.length}`);
+    }
+  } catch (err) {
+    // chatCompletion 重新抛出的网络错误 → 映射为 failure，走下方 fallback 返回原始 Markdown
+    const error = err instanceof Error ? err : new Error(String(err));
+    aiResult = { success: false, error: `MiMo API 请求异常: ${error.message}` };
+  }
 
   if (!aiResult.success) {
     // AI 分析失败 -> 返回错误 + 原始 Markdown 作为 fallback（经过 overflow 保护）
