@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
+import type { AppConfig } from "../src/config.js";
 
 // ── Mock MCP SDK ──────────────────────────────────────
 // 捕获 server.tool() 注册的工具处理器
@@ -30,19 +31,34 @@ function callHandler(args: Record<string, unknown>, signal?: AbortSignal) {
   return handler(args, { signal: signal ?? new AbortController().signal });
 }
 
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-  StdioServerTransport: class {
-    async close() {}
-  },
-}));
-
-// ── 设置环境变量（模块顶层代码需要）──────────────────
-process.env.MIMO_API_KEY = "test-api-key";
-
 // ── 导入被测模块 ──────────────────────────────────────
-// 动态导入，确保 mock 生效后再加载
-const { default: _mod } = await import("../src/index.js");
-// index.ts 是副作用模块，导入即执行，handler 已被捕获
+// 动态导入，确保 mock 生效后再加载；config 经工厂注入，不再依赖 import 前置环境变量
+const { createServer } = await import("../src/server.js");
+
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2, // 重试测试依赖
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760,
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
+
+createServer(TEST_CONFIG); // 注册工具，handler 已被捕获
 
 // ── 辅助函数 ─────────────────────────────────────────
 
@@ -228,7 +244,7 @@ describe("mimo_web_search 工具", () => {
     expect(options.headers["api-key"]).toBe("test-api-key");
 
     const body = JSON.parse(options.body);
-    expect(body.model).toBe("mimo-v2.6-flash");
+    expect(body.model).toBe(TEST_CONFIG.model);
     expect(body.messages[0].content).toBe("搜索词");
     expect(body.tools[0].type).toBe("web_search");
     expect(body.tools[0].max_keyword).toBe(5);

@@ -1,31 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// mock config 必须在 import 之前
-vi.mock("../src/config.js", () => ({
-  loadConfig: () => ({
-    apiKey: "test",
-    baseUrl: "https://test.com",
-    model: "mimo-v2.5-pro",
-    requestTimeout: 60000,
-    maxCompletionTokens: 5120,
-    temperature: 0.4,
-    topP: 0.95,
-    thinking: false,
-    logLevel: 0,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
-    defaultMaxKeyword: 3,
-    defaultLimit: 5,
-    maxQueryLength: 10000,
-    maxFetchSize: 10485760,
-    fetchTimeout: 30000,
-    enableBrowser: false,
-    autoSummary: true,
-  }),
-}));
-
 import {
   mergeAbortSignals,
   calculateRetryDelay,
@@ -101,19 +75,19 @@ describe("calculateRetryDelay", () => {
 
   it("首次重试（attempt=0）返回 baseDelay + jitter", () => {
     // baseDelay = 1000 * 2^0 = 1000, jitter = 0.5 * 1000 * 0.5 = 250
-    const delay = calculateRetryDelay(0);
+    const delay = calculateRetryDelay(0, 1000);
     expect(delay).toBe(1250);
   });
 
   it("第二次重试（attempt=1）返回 2x baseDelay + jitter", () => {
     // baseDelay = 1000 * 2^1 = 2000, jitter = 0.5 * 2000 * 0.5 = 500
-    const delay = calculateRetryDelay(1);
+    const delay = calculateRetryDelay(1, 1000);
     expect(delay).toBe(2500);
   });
 
   it("指数增长：attempt=2 是 attempt=0 的 4 倍基础延迟", () => {
-    const delay0 = calculateRetryDelay(0);
-    const delay2 = calculateRetryDelay(2);
+    const delay0 = calculateRetryDelay(0, 1000);
+    const delay2 = calculateRetryDelay(2, 1000);
     // delay2 / delay0 应该接近 4（因为 jitter 比例相同）
     expect(delay2 / delay0).toBeCloseTo(4, 0);
   });

@@ -10,9 +10,10 @@ import { createServer } from "./server.js";
 
 // ── 初始化 ────────────────────────────────────────────
 
+// ── composition root：全进程唯一的 loadConfig() ──────
 const config = loadConfig();
-const logger = createLogger(config);
-const server = createServer();
+const logger = createLogger(config.logLevel);
+const server = createServer(config);
 
 // ── 优雅关闭 ──────────────────────────────────────────
 

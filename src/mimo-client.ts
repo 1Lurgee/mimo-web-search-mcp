@@ -6,14 +6,9 @@
  * 重试策略由调用方决定（search.ts 有重试，fetch-tool.ts 无重试）。
  */
 
-import { loadConfig } from "./config.js";
+import { loadConfig, type AppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { fetchWithTimeout, TIMEOUT_REASON } from "./util.js";
-
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
 
 // ── Zod Schemas（响应校验）────────────────────────────
 
@@ -100,6 +95,8 @@ export interface ChatCompletionOptions {
   consumer?: ToolConsumer;
   /** 当前重试尝试次数（写入 401 归因 details，便于排查） */
   attempt?: number;
+  /** 配置注入（默认惰性 loadConfig；由调用方传入以免 import 时读取环境） */
+  config?: AppConfig;
 }
 
 /** 成功结果 */
@@ -147,16 +144,19 @@ export async function chatCompletion(
   options: ChatCompletionOptions = {},
 ): Promise<ChatCompletionResult> {
   const { tools, signal, reqId, consumer = "MiMoAPI", attempt } = options;
+  // 配置/日志在调用时求值（import 本模块不需要环境变量）
+  const cfg = options.config ?? loadConfig();
+  const logger = createLogger(cfg.logLevel);
   const log = reqId ? logger.withReqId(reqId) : logger;
 
   const body: MimoRequestBody = {
-    model: config.model,
+    model: cfg.model,
     messages,
-    max_completion_tokens: config.maxCompletionTokens,
-    temperature: config.temperature,
-    top_p: config.topP,
+    max_completion_tokens: cfg.maxCompletionTokens,
+    temperature: cfg.temperature,
+    top_p: cfg.topP,
     stream: false,
-    thinking: { type: config.thinking ? "enabled" : "disabled" },
+    thinking: { type: cfg.thinking ? "enabled" : "disabled" },
   };
 
   if (tools) {
@@ -171,16 +171,16 @@ export async function chatCompletion(
     log.info("调用 MiMo API...");
 
     const resp = await fetchWithTimeout(
-      `${config.baseUrl}/chat/completions`,
+      `${cfg.baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: {
-          "api-key": config.apiKey,
+          "api-key": cfg.apiKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
       },
-      config.requestTimeout,
+      cfg.requestTimeout,
       signal,
     );
 

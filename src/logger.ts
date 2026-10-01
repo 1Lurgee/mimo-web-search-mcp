@@ -1,6 +1,6 @@
 /** 日志工具 - 通过配置控制日志级别 */
 
-import { type AppConfig, LogLevel } from "./config.js";
+import { LogLevel } from "./config.js";
 
 const PREFIX = "[mimo-web-search]";
 
@@ -19,9 +19,8 @@ export interface Logger {
   withReqId(reqId: string): Logger;
 }
 
-/** 创建日志器实例 */
-export function createLogger(config: AppConfig): Logger {
-  const { logLevel } = config;
+/** 创建日志器实例（只需要 logLevel，不依赖完整配置） */
+export function createLogger(logLevel: LogLevel): Logger {
 
   function createScopedLogger(prefix: string): Logger {
     function log(level: LogLevel, ...args: unknown[]): void {

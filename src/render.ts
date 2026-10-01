@@ -1,11 +1,8 @@
 /** SPA 浏览器渲染降级模块 - 当网页为 SPA 且启用浏览器时，用 Playwright 渲染 */
 
-import { loadConfig } from "./config.js";
-import { createLogger } from "./logger.js";
+import { loadConfig, type AppConfig } from "./config.js";
+import { createLogger, type Logger } from "./logger.js";
 import { redactUrl } from "./ssrf.js";
-
-const config = loadConfig();
-const logger = createLogger(config);
 
 // ── SPA 启发式检测 ────────────────────────────────────
 
@@ -60,7 +57,7 @@ let _browserIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let _browserClosing = false; // 防止在 close() 进行中时复用浏览器
 const BROWSER_IDLE_TIMEOUT_MS = 30_000; // 空闲 30 秒自动关闭
 
-function scheduleBrowserClose(): void {
+function scheduleBrowserClose(logger: Logger): void {
   if (_browserIdleTimer) clearTimeout(_browserIdleTimer);
   _browserIdleTimer = setTimeout(async () => {
     if (_browserInstance) {
@@ -121,19 +118,26 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
  * 动态 import playwright，未安装时返回友好提示
  *
  * @param url - 目标 URL
- * @param timeout - 渲染超时（毫秒）
+ * @param timeout - 渲染超时（毫秒），省略时从 config 取
  * @param signal - 外部中止信号（请求被取消时尽快返回）
+ * @param config - 配置注入（默认惰性 loadConfig；由调用方传入以免读取环境）
  * @returns 渲染结果
  */
 export async function renderWithBrowser(
   url: string,
-  timeout: number = config.fetchTimeout,
+  timeout?: number,
   signal?: AbortSignal,
+  config?: AppConfig,
 ): Promise<RenderResult> {
-  // 预先中止检查：不依赖 playwright，请求已取消时立即返回
+  // 预先中止检查：不依赖 playwright/配置，请求已取消时立即返回
   if (signal?.aborted) {
     return { html: "", success: false, error: "浏览器渲染已取消（请求被中止）" };
   }
+
+  // 配置/日志在调用时求值（import 本模块不需要环境变量）
+  const cfg = config ?? loadConfig();
+  const logger = createLogger(cfg.logLevel);
+  const effectiveTimeout = timeout ?? cfg.fetchTimeout;
 
   // 动态导入 playwright——避免硬依赖，未安装时给出友好提示
   // 使用变量拼接避免 TypeScript 静态解析模块路径
@@ -168,7 +172,7 @@ export async function renderWithBrowser(
       await raceAbort(
         page.goto(url, {
           waitUntil: "networkidle",
-          timeout,
+          timeout: effectiveTimeout,
         }),
         signal,
       );
@@ -210,7 +214,7 @@ export async function renderWithBrowser(
     };
   } finally {
     // 不关闭浏览器——由空闲定时器管理生命周期
-    scheduleBrowserClose();
+    scheduleBrowserClose(logger);
   }
 }
 
@@ -218,9 +222,6 @@ export async function renderWithBrowser(
  * 获取 SPA 降级提示文本（当浏览器未启用时）
  */
 export function getSpaHint(): string {
-  if (config.enableBrowser) {
-    return ""; // 不应调用此函数
-  }
   return (
     "\n\n**提示**：该页面疑似 SPA（单页应用），Readability 无法提取正文。" +
     "可设置环境变量 `MIMO_ENABLE_BROWSER=true` 启用浏览器渲染（需先安装 playwright: `npm install playwright && npx playwright install chromium`）。"

@@ -1,7 +1,7 @@
 /** 网页抓取模块 - HTTP fetch 用于获取网页内容 */
 
 import os from "node:os";
-import { loadConfig } from "./config.js";
+import { loadConfig, type AppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { validateUrl, isPermittedRedirect, redactUrl, isLocalOrPrivateHostname } from "./ssrf.js";
 import { mergeAbortSignals, TIMEOUT_REASON } from "./util.js";
@@ -9,10 +9,7 @@ import { globalFetchCache } from "./cache.js";
 import { detectCharset, hasGbkSupport } from "./charset.js";
 import { isBinaryContentType, streamToLimitedBuffer } from "./stream.js";
 
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
+// ── 配置/日志在调用时求值（见 FetchPageOptions.config）──
 
 // ── 动态 User-Agent（防止 WAF 拦截）──────────────────
 
@@ -75,6 +72,8 @@ export interface FetchPageOptions {
   maxSize?: number;
   /** 请求超时时间（毫秒），默认从配置读取 */
   timeout?: number;
+  /** 配置注入（默认惰性 loadConfig；由调用方传入以免 import 时读取环境） */
+  config?: AppConfig;
 }
 
 /** fetchPage 返回结果 */
@@ -111,8 +110,9 @@ async function fetchPageInternal(
   options: FetchPageOptions,
   redirectCount: number,
 ): Promise<FetchPageResult> {
-  const { signal, maxSize = config.maxFetchSize, timeout = config.fetchTimeout } = options;
-  const log = logger;
+  const cfg = options.config ?? loadConfig();
+  const log = createLogger(cfg.logLevel);
+  const { signal, maxSize = cfg.maxFetchSize, timeout = cfg.fetchTimeout } = options;
 
   // URL 基础验证（协议 / 格式 / 长度；本地部署允许私有 IP 与任意端口）
   const validation = validateUrl(url);
@@ -381,16 +381,19 @@ async function fetchPageInternal(
  * - 错误返回结果对象而非抛出异常（编程错误除外）
  */
 export async function fetchPage(url: string, options: FetchPageOptions = {}): Promise<FetchPageResult> {
+  const log = createLogger((options.config ?? loadConfig()).logLevel);
+
   // 检查缓存
   const cached = globalFetchCache.get(url);
   if (cached) {
+    log.debug(`缓存命中: ${redactUrl(url)}`);
     return cached;
   }
 
   // 检查是否有相同 URL 的进行中请求（去重）
   const inflight = inflightRequests.get(url);
   if (inflight) {
-    logger.debug(`复用进行中的请求: ${redactUrl(url)}`);
+    log.debug(`复用进行中的请求: ${redactUrl(url)}`);
     return inflight;
   }
 
@@ -404,6 +407,7 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
     // 成功结果存入缓存（错误不缓存）
     if (!result.error) {
       globalFetchCache.set(url, result);
+      log.debug(`缓存写入: ${redactUrl(url)} (${result.size} 字节)`);
     }
 
     return result;

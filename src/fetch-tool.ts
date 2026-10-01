@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fetchPage } from "./fetch.js";
 import { validateUrl, redactUrl } from "./ssrf.js";
 import { htmlToMarkdown } from "./convert.js";
-import { loadConfig } from "./config.js";
+import { type AppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { type FetchParams } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -13,11 +13,6 @@ import { isSpaPage, renderWithBrowser, getSpaHint } from "./render.js";
 import { handleOverflow } from "./overflow.js";
 import { chatCompletion, type MimoRequestBody } from "./mimo-client.js";
 import type { ProgressReporter } from "./progress.js";
-
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
 
 // ── 元数据头格式化 ─────────────────────────────────────
 
@@ -77,13 +72,30 @@ function buildAiMessages(markdown: string, prompt: string): MimoRequestBody["mes
  * 5. 无 prompt -> 返回 Markdown
  * 6. 有 prompt -> 调用 MiMo API 进行 AI 分析
  */
+/** 抓取执行函数签名（工厂返回类型） */
+export type ExecuteFetch = (
+  params: FetchParams,
+  signal?: AbortSignal,
+  reqId?: string,
+  reporter?: ProgressReporter,
+) => Promise<CallToolResult>;
+
+/**
+ * 抓取工厂：由 composition root（createServer）注入配置
+ * 返回的函数与原 executeFetch 调用方式一致
+ */
+export function createExecuteFetch(config: AppConfig): ExecuteFetch {
+  return (params, signal, reqId, reporter) => executeFetch(config, params, signal, reqId, reporter);
+}
+
 export async function executeFetch(
+  config: AppConfig,
   params: FetchParams,
   signal?: AbortSignal,
   reqId: string = randomUUID(),
   reporter?: ProgressReporter,
 ): Promise<CallToolResult> {
-  const log = logger.withReqId(reqId);
+  const log = createLogger(config.logLevel).withReqId(reqId);
   const { url, prompt, clean, maxLength } = params;
 
   // ── 1. URL 验证 ──
@@ -98,7 +110,7 @@ export async function executeFetch(
   // ── 2. 抓取网页 ──
   log.info(`开始抓取: ${redactUrl(url)}`);
   await reporter?.report(0, "正在抓取网页...");
-  const result = await fetchPage(url, { signal });
+  const result = await fetchPage(url, { signal, config });
 
   if (result.error) {
     log.error(`抓取失败: ${result.error}`);
@@ -127,7 +139,7 @@ export async function executeFetch(
   await reporter?.report(33, "正在提取正文...");
   // 转换层不预先截断（maxLength 由 fetch-tool 在真实长度上统一判定：
   // fits 直接返回 / 超长走自动摘要 / 失败或关闭时 handleOverflow 单次截断）
-  let markdown = htmlToMarkdown(result.content, { clean, maxLength: Number.MAX_SAFE_INTEGER });
+  let markdown = htmlToMarkdown(result.content, { clean, maxLength: Number.MAX_SAFE_INTEGER, logger: log });
   log.info(`Markdown 转换完成，长度: ${markdown.length}`);
 
   // ── 4.1 SPA 降级检测 ──
@@ -136,7 +148,7 @@ export async function executeFetch(
     await reporter?.report(50, "检测到 SPA，正在渲染...");
     if (config.enableBrowser) {
       log.info("启用浏览器渲染降级...");
-      const rendered = await renderWithBrowser(url, config.fetchTimeout, signal);
+      const rendered = await renderWithBrowser(url, config.fetchTimeout, signal, config);
       // 请求已被取消 → 不把"渲染失败:已取消"拼进 markdown，直接返回
       if (signal?.aborted) {
         log.info("请求已取消，跳过后续处理");
@@ -144,7 +156,7 @@ export async function executeFetch(
       }
       if (rendered.success && rendered.html) {
         // 用渲染后的 HTML 重新提取 Markdown
-        markdown = htmlToMarkdown(rendered.html, { clean, maxLength: Number.MAX_SAFE_INTEGER });
+        markdown = htmlToMarkdown(rendered.html, { clean, maxLength: Number.MAX_SAFE_INTEGER, logger: log });
         log.info(`浏览器渲染后 Markdown 长度: ${markdown.length}`);
       } else {
         log.warn(`浏览器渲染失败: ${rendered.error}`);
@@ -180,7 +192,7 @@ export async function executeFetch(
       let aiResult: AiResult;
       try {
         log.info("调用 MiMo API 进行内容分析...");
-        const r = await chatCompletion(buildAiMessages(contentForSummary, summaryPrompt), { signal, reqId });
+        const r = await chatCompletion(buildAiMessages(contentForSummary, summaryPrompt), { signal, reqId, config });
         aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
       } catch (err) {
         // chatCompletion 重新抛出的网络错误（ECONNRESET、ECONNREFUSED 等）→ 走下方回退
@@ -221,7 +233,7 @@ export async function executeFetch(
   const contentForAi = truncateMarkdown(markdown, maxLength);
   let aiResult: AiResult;
   try {
-    const r = await chatCompletion(buildAiMessages(contentForAi, prompt), { signal, reqId });
+    const r = await chatCompletion(buildAiMessages(contentForAi, prompt), { signal, reqId, config });
     aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
     if (aiResult.success) {
       log.info(`AI 分析完成，内容长度: ${aiResult.content.length}`);

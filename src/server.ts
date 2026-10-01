@@ -4,16 +4,17 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pLimit from "p-limit";
-import { loadConfig } from "./config.js";
-import { executeSearch } from "./search.js";
-import { executeFetch } from "./fetch-tool.js";
+import { type AppConfig } from "./config.js";
+import { createExecuteSearch } from "./search.js";
+import { createExecuteFetch } from "./fetch-tool.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createProgressReporter } from "./progress.js";
 
-/** 创建并配置 MCP Server（注册所有工具） */
-export function createServer(): McpServer {
-  const config = loadConfig();
+/** 创建并配置 MCP Server（注册所有工具，配置由 composition root 注入） */
+export function createServer(config: AppConfig): McpServer {
   const limitConcurrency = pLimit(config.maxConcurrent);
+  const executeSearch = createExecuteSearch(config);
+  const executeFetch = createExecuteFetch(config);
 
   const server = new McpServer({
     name: "mimo-web-search",

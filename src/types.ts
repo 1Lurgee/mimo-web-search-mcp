@@ -2,8 +2,8 @@
  * 请求侧类型定义
  *
  * API 响应的 Zod Schema 和类型位于 ./mimo-client.ts。
- * 此处只放无需运行时校验的请求参数 interface，
- * 不 re-export mimo-client 的值（会触发其模块初始化并要求 MIMO_API_KEY）。
+ * 此处只放无需运行时校验的请求参数 interface；
+ * 响应侧需要 Zod 运行时校验的部分不在此重复导出。
  */
 
 // ── 请求侧类型（无需运行时校验，保留 interface）────────

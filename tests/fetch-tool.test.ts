@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-// ── 设置环境变量（模块顶层代码需要）──────────────────
-process.env.MIMO_API_KEY = "test-api-key";
+import type { AppConfig } from "../src/config.js";
 
 // ── Mock 外部依赖 ────────────────────────────────────────
 
@@ -32,11 +30,37 @@ vi.mock("../src/render.js", () => ({
 
 // ── 导入被测模块和 mock 引用 ─────────────────────────────
 
-const { executeFetch } = await import("../src/fetch-tool.js");
+const { createExecuteFetch } = await import("../src/fetch-tool.js");
 const { fetchPage } = await import("../src/fetch.js");
 const { validateUrl } = await import("../src/ssrf.js");
 const { htmlToMarkdown } = await import("../src/convert.js");
 const { isSpaPage, renderWithBrowser, getSpaHint } = await import("../src/render.js");
+
+// 测试配置（config 经工厂注入，测试不再依赖 import 前置环境变量）
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2,
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760,
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
+
+const executeFetch = createExecuteFetch(TEST_CONFIG);
 
 // 类型断言，方便后续 mock 调用
 const mockValidateUrl = vi.mocked(validateUrl);
@@ -569,38 +593,22 @@ describe("executeFetch", () => {
     });
 
     it("autoSummary=false -> 超长内容硬截断且不调用 API", async () => {
-      // 临时体操：阶段 4 config 注入后改用 createExecuteFetch({ autoSummary: false })
-      vi.resetModules();
-      const prev = process.env.MIMO_AUTO_SUMMARY;
-      process.env.MIMO_AUTO_SUMMARY = "false";
-      try {
-        const { executeFetch: freshExecuteFetch } = await import("../src/fetch-tool.js");
-        const { validateUrl: freshValidateUrl } = await import("../src/ssrf.js");
-        const { fetchPage: freshFetchPage } = await import("../src/fetch.js");
-        const { htmlToMarkdown: freshHtmlToMarkdown } = await import("../src/convert.js");
-        vi.mocked(freshValidateUrl).mockReturnValue({ valid: true });
-        vi.mocked(freshFetchPage).mockResolvedValue(makeFetchPageSuccess());
-        vi.mocked(freshHtmlToMarkdown).mockReturnValue("x".repeat(1500));
-        const fetchSpy = vi.fn();
-        vi.stubGlobal("fetch", fetchSpy);
+      // config 经工厂注入：无需 resetModules/env 体操
+      const executeFetchNoSummary = createExecuteFetch({ ...TEST_CONFIG, autoSummary: false });
+      mockHtmlToMarkdown.mockReturnValue("x".repeat(1500));
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
 
-        const result = await freshExecuteFetch({
-          url: "https://example.com",
-          clean: true,
-          maxLength: 1000,
-        });
+      const result = await executeFetchNoSummary({
+        url: "https://example.com",
+        clean: true,
+        maxLength: 1000,
+      });
 
-        expect(fetchSpy).not.toHaveBeenCalled();
-        const text = result.content[0].text;
-        expect(text).toContain("[Content truncated due to size limit...]");
-        expect(text).not.toContain("Mode: AI processed");
-      } finally {
-        if (prev === undefined) {
-          delete process.env.MIMO_AUTO_SUMMARY;
-        } else {
-          process.env.MIMO_AUTO_SUMMARY = prev;
-        }
-      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+      const text = result.content[0].text;
+      expect(text).toContain("[Content truncated due to size limit...]");
+      expect(text).not.toContain("Mode: AI processed");
     });
   });
 
@@ -701,6 +709,34 @@ describe("executeFetch", () => {
       // clean=false 时不触发 SPA 检测
       expect(isSpaPage).not.toHaveBeenCalled();
       expect(renderWithBrowser).not.toHaveBeenCalled();
+    });
+
+    it("SPA + enableBrowser -> renderWithBrowser 收到 signal 与 config，二次转换不预先截断", async () => {
+      const executeFetchBrowser = createExecuteFetch({ ...TEST_CONFIG, enableBrowser: true });
+      vi.mocked(isSpaPage).mockReturnValue(true);
+      vi.mocked(renderWithBrowser).mockResolvedValue({
+        success: true,
+        html: "<html><body>Rendered SPA content</body></html>",
+      });
+      const controller = new AbortController();
+
+      await executeFetchBrowser(
+        { url: "https://spa.example.com", clean: true, maxLength: 1000 },
+        controller.signal,
+      );
+
+      // 取消 seam 贯通到渲染路径（阶段 3 欠账）
+      expect(renderWithBrowser).toHaveBeenCalledWith(
+        "https://spa.example.com",
+        TEST_CONFIG.fetchTimeout,
+        controller.signal,
+        expect.objectContaining({ enableBrowser: true }),
+      );
+      // 渲染后的二次转换同样不预先截断（阶段 2 欠账）
+      expect(mockHtmlToMarkdown).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ maxLength: Number.MAX_SAFE_INTEGER }),
+      );
     });
   });
 });

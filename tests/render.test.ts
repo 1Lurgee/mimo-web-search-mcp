@@ -1,39 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
+import type { AppConfig } from "../src/config.js";
 
-// ── Mock 配置和日志模块 ──────────────────────────────
-vi.mock("../src/config.js", () => ({
-  loadConfig: () => ({
-    apiKey: "test-api-key",
-    baseUrl: "https://api.xiaomimimo.com/v1",
-    model: "mimo-v2.5-pro",
-    requestTimeout: 60000,
-    maxCompletionTokens: 1024,
-    temperature: 0.3,
-    topP: 0.95,
-    thinking: false,
-    logLevel: 0,
-    maxRetries: 2,
-    retryDelay: 1000,
-    maxContentLength: 100000,
-    maxConcurrent: 10,
-    defaultMaxKeyword: 3,
-    defaultLimit: 5,
-    maxQueryLength: 10000,
-    maxFetchSize: 10485760,
-    fetchTimeout: 30000,
-    enableBrowser: false,
-    autoSummary: true,
-  }),
-}));
-
-vi.mock("../src/logger.js", () => ({
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
-}));
+// config/logger 已在调用时求值，测试经参数注入，无需 mock
+const TEST_CONFIG: AppConfig = {
+  apiKey: "test-api-key",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+  model: "mimo-v2.6-flash",
+  requestTimeout: 60000,
+  maxCompletionTokens: 1024,
+  temperature: 0.3,
+  topP: 0.95,
+  thinking: false,
+  logLevel: 0,
+  maxRetries: 2,
+  retryDelay: 1000,
+  maxContentLength: 100000,
+  maxConcurrent: 10,
+  defaultMaxKeyword: 3,
+  defaultLimit: 5,
+  maxQueryLength: 10000,
+  maxFetchSize: 10485760,
+  fetchTimeout: 30000,
+  enableBrowser: false,
+  autoSummary: true,
+};
 
 const { isSpaPage, renderWithBrowser } = await import("../src/render.js");
 
@@ -78,7 +68,7 @@ describe("renderWithBrowser 取消", () => {
     pw.goto.mockImplementationOnce(() => new Promise<Response>(() => {})); // 永不 resolve
     const controller = new AbortController();
 
-    const pending = renderWithBrowser("https://example.com", 5000, controller.signal);
+    const pending = renderWithBrowser("https://example.com", 5000, controller.signal, TEST_CONFIG);
     // 等 goto 真正开始（launch + newPage 均为 async）
     await vi.waitFor(() => expect(pw.goto).toHaveBeenCalledTimes(1));
     controller.abort();

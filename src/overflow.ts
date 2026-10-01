@@ -3,14 +3,7 @@
  * 本地单用户场景不落盘；后续若需其它策略可在此扩展。
  */
 
-import { loadConfig } from "./config.js";
-import { createLogger } from "./logger.js";
 import { truncateMarkdown } from "./util.js";
-
-// ── 模块级单例 ────────────────────────────────────────
-
-const config = loadConfig();
-const logger = createLogger(config);
 
 // ── 类型定义 ──────────────────────────────────────────
 
@@ -38,8 +31,6 @@ export async function handleOverflow(
   if (content.length <= maxLength) {
     return { content };
   }
-
-  logger.info(`内容溢出: ${content.length} 字符 > ${maxLength} 字符限制`);
 
   // 使用共享的语义边界截断（含 Markdown 链接修复）
   return { content: truncateMarkdown(content, maxLength) };
