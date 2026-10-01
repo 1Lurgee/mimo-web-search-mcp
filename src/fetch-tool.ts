@@ -125,7 +125,9 @@ export async function executeFetch(
   // ── 4. HTML -> Markdown ──
   log.info("开始 HTML 转 Markdown...");
   await reporter?.report(33, "正在提取正文...");
-  let markdown = htmlToMarkdown(result.content, { clean, maxLength });
+  // 转换层不预先截断（maxLength 由 fetch-tool 在真实长度上统一判定：
+  // fits 直接返回 / 超长走自动摘要 / 失败或关闭时 handleOverflow 单次截断）
+  let markdown = htmlToMarkdown(result.content, { clean, maxLength: Number.MAX_SAFE_INTEGER });
   log.info(`Markdown 转换完成，长度: ${markdown.length}`);
 
   // ── 4.1 SPA 降级检测 ──
@@ -137,7 +139,7 @@ export async function executeFetch(
       const rendered = await renderWithBrowser(url);
       if (rendered.success && rendered.html) {
         // 用渲染后的 HTML 重新提取 Markdown
-        markdown = htmlToMarkdown(rendered.html, { clean, maxLength });
+        markdown = htmlToMarkdown(rendered.html, { clean, maxLength: Number.MAX_SAFE_INTEGER });
         log.info(`浏览器渲染后 Markdown 长度: ${markdown.length}`);
       } else {
         log.warn(`浏览器渲染失败: ${rendered.error}`);
@@ -210,9 +212,11 @@ export async function executeFetch(
   // ── 6. 有 prompt -> 调用 MiMo API ──
   log.info(`开始 AI 分析，prompt: ${prompt.substring(0, 50)}...`);
   await reporter?.report(83, "正在 AI 分析...");
+  // AI 输入显式收界到 maxLength（转换层不再隐式截断，防止超长页面打爆 context）
+  const contentForAi = truncateMarkdown(markdown, maxLength);
   let aiResult: AiResult;
   try {
-    const r = await chatCompletion(buildAiMessages(markdown, prompt), { signal, reqId });
+    const r = await chatCompletion(buildAiMessages(contentForAi, prompt), { signal, reqId });
     aiResult = r.success ? { success: true, content: r.content } : { success: false, error: r.error };
     if (aiResult.success) {
       log.info(`AI 分析完成，内容长度: ${aiResult.content.length}`);

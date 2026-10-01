@@ -468,12 +468,13 @@ describe("executeFetch", () => {
       );
     });
 
-    it("maxLength 参数正确传递给 htmlToMarkdown", async () => {
+    it("htmlToMarkdown 收到 Number.MAX_SAFE_INTEGER（转换层不预先截断）", async () => {
       await executeFetch({ url: "https://example.com", clean: true, maxLength: 10000 });
 
+      // 回归测试：convert 不再按 maxLength 静默截断，超长判定由 fetch-tool 在真实长度上进行
       expect(mockHtmlToMarkdown).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ maxLength: 10000 }),
+        expect.objectContaining({ maxLength: Number.MAX_SAFE_INTEGER }),
       );
     });
 
@@ -488,6 +489,118 @@ describe("executeFetch", () => {
         "https://example.com",
         expect.objectContaining({ signal: controller.signal }),
       );
+    });
+  });
+
+  // ── 超长 HTML 判定与自动摘要 ─────────────────────────
+
+  describe("超长 HTML 判定与自动摘要", () => {
+    const summaryResponse = {
+      choices: [{ message: { content: "这是自动摘要结果" } }],
+      usage: {},
+    };
+
+    it("HTML 内容超过 maxLength -> 走自动摘要而非静默截断", async () => {
+      mockHtmlToMarkdown.mockReturnValue("x".repeat(1500));
+      const fetchMock = mockGlobalFetchJson(200, summaryResponse);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await executeFetch({
+        url: "https://example.com",
+        clean: true,
+        maxLength: 1000,
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      const [requestUrl] = fetchMock.mock.calls[0];
+      expect(requestUrl).toContain("/chat/completions");
+      const text = result.content[0].text;
+      expect(text).toContain("这是自动摘要结果");
+      expect(text).toContain("Mode: AI processed");
+    });
+
+    it("自动摘要接收未被 maxLength 截断的输入（100K 上界内完整送达）", async () => {
+      // 哨兵位于 maxLength(1000) 之外：证明送摘要的是未截断全文
+      mockHtmlToMarkdown.mockReturnValue("x".repeat(1200) + "TAIL_SENTINEL_9f3a");
+      const fetchMock = mockGlobalFetchJson(200, summaryResponse);
+      vi.stubGlobal("fetch", fetchMock);
+
+      await executeFetch({ url: "https://example.com", clean: true, maxLength: 1000 });
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+      expect(body.messages[1].content).toContain("TAIL_SENTINEL_9f3a");
+    });
+
+    it("自动摘要失败 -> 回退硬截断并附加失败说明", async () => {
+      mockHtmlToMarkdown.mockReturnValue("x".repeat(1500));
+      vi.stubGlobal("fetch", mockGlobalFetchJson(500, { error: "Internal Server Error" }));
+
+      const result = await executeFetch({
+        url: "https://example.com",
+        clean: true,
+        maxLength: 1000,
+      });
+
+      const text = result.content[0].text;
+      expect(text).toContain("自动摘要失败");
+      expect(text).toContain("[Content truncated due to size limit...]");
+      expect(text).not.toContain("Mode: AI processed");
+    });
+
+    it("有 prompt 时 AI 输入收界到 maxLength（发送前截断）", async () => {
+      mockHtmlToMarkdown.mockReturnValue("x".repeat(4000) + "TAIL_SENTINEL_9f3a");
+      const fetchMock = mockGlobalFetchJson(200, {
+        choices: [{ message: { content: "ok" } }],
+        usage: {},
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await executeFetch({
+        url: "https://example.com",
+        prompt: "总结",
+        clean: true,
+        maxLength: 1000,
+      });
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+      // 转换层不再隐式收界，AI 输入必须显式截断到 maxLength（+ 截断通知）
+      expect(body.messages[1].content).not.toContain("TAIL_SENTINEL_9f3a");
+      expect(body.messages[1].content.length).toBeLessThan(2000);
+    });
+
+    it("autoSummary=false -> 超长内容硬截断且不调用 API", async () => {
+      // 临时体操：阶段 4 config 注入后改用 createExecuteFetch({ autoSummary: false })
+      vi.resetModules();
+      const prev = process.env.MIMO_AUTO_SUMMARY;
+      process.env.MIMO_AUTO_SUMMARY = "false";
+      try {
+        const { executeFetch: freshExecuteFetch } = await import("../src/fetch-tool.js");
+        const { validateUrl: freshValidateUrl } = await import("../src/ssrf.js");
+        const { fetchPage: freshFetchPage } = await import("../src/fetch.js");
+        const { htmlToMarkdown: freshHtmlToMarkdown } = await import("../src/convert.js");
+        vi.mocked(freshValidateUrl).mockReturnValue({ valid: true });
+        vi.mocked(freshFetchPage).mockResolvedValue(makeFetchPageSuccess());
+        vi.mocked(freshHtmlToMarkdown).mockReturnValue("x".repeat(1500));
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const result = await freshExecuteFetch({
+          url: "https://example.com",
+          clean: true,
+          maxLength: 1000,
+        });
+
+        expect(fetchSpy).not.toHaveBeenCalled();
+        const text = result.content[0].text;
+        expect(text).toContain("[Content truncated due to size limit...]");
+        expect(text).not.toContain("Mode: AI processed");
+      } finally {
+        if (prev === undefined) {
+          delete process.env.MIMO_AUTO_SUMMARY;
+        } else {
+          process.env.MIMO_AUTO_SUMMARY = prev;
+        }
+      }
     });
   });
 
