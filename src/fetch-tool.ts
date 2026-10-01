@@ -136,7 +136,12 @@ export async function executeFetch(
     await reporter?.report(50, "检测到 SPA，正在渲染...");
     if (config.enableBrowser) {
       log.info("启用浏览器渲染降级...");
-      const rendered = await renderWithBrowser(url);
+      const rendered = await renderWithBrowser(url, config.fetchTimeout, signal);
+      // 请求已被取消 → 不把"渲染失败:已取消"拼进 markdown，直接返回
+      if (signal?.aborted) {
+        log.info("请求已取消，跳过后续处理");
+        return { content: [{ type: "text", text: "请求已取消" }], isError: true };
+      }
       if (rendered.success && rendered.html) {
         // 用渲染后的 HTML 重新提取 Markdown
         markdown = htmlToMarkdown(rendered.html, { clean, maxLength: Number.MAX_SAFE_INTEGER });

@@ -85,15 +85,56 @@ export interface RenderResult {
   error?: string;
 }
 
+/** 构造 AbortError（与 controller.abort() 的 reason 一致） */
+function abortError(): Error {
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
+/** 将 AbortSignal 竞态接入 Promise：signal 触发时以 AbortError 拒绝 */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    // 避免原 promise 变成未处理拒绝
+    promise.catch(() => "");
+    return Promise.reject(abortError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * 使用 Playwright 渲染 SPA 页面
  * 动态 import playwright，未安装时返回友好提示
  *
  * @param url - 目标 URL
  * @param timeout - 渲染超时（毫秒）
+ * @param signal - 外部中止信号（请求被取消时尽快返回）
  * @returns 渲染结果
  */
-export async function renderWithBrowser(url: string, timeout: number = config.fetchTimeout): Promise<RenderResult> {
+export async function renderWithBrowser(
+  url: string,
+  timeout: number = config.fetchTimeout,
+  signal?: AbortSignal,
+): Promise<RenderResult> {
+  // 预先中止检查：不依赖 playwright，请求已取消时立即返回
+  if (signal?.aborted) {
+    return { html: "", success: false, error: "浏览器渲染已取消（请求被中止）" };
+  }
+
   // 动态导入 playwright——避免硬依赖，未安装时给出友好提示
   // 使用变量拼接避免 TypeScript 静态解析模块路径
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,15 +165,22 @@ export async function renderWithBrowser(url: string, timeout: number = config.fe
 
     const page = await browser.newPage();
     try {
-      await page.goto(url, {
-        waitUntil: "networkidle",
-        timeout,
-      });
+      await raceAbort(
+        page.goto(url, {
+          waitUntil: "networkidle",
+          timeout,
+        }),
+        signal,
+      );
 
       // 等待页面稳定（SPA 路由和数据加载完成后）
-      await page.waitForTimeout(1000);
+      await raceAbort(page.waitForTimeout(1000), signal);
 
       const html = await page.content();
+      // content() 很快但非瞬时：返回前再查一次取消状态
+      if (signal?.aborted) {
+        throw abortError();
+      }
       logger.info(`浏览器渲染完成: ${redactUrl(url)} (${html.length} 字符)`);
 
       return { html, success: true };
@@ -141,6 +189,13 @@ export async function renderWithBrowser(url: string, timeout: number = config.fe
     }
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
+
+    // 外部取消（非超时）→ 归类为已取消，页面已在内层 finally 关闭
+    if (error.name === "AbortError" && signal?.aborted) {
+      logger.info(`浏览器渲染已取消: ${redactUrl(url)}`);
+      return { html: "", success: false, error: "浏览器渲染已取消（请求被中止）" };
+    }
+
     logger.error(`浏览器渲染失败: ${error.message}`);
 
     // 连接断开时清理缓存实例

@@ -35,7 +35,60 @@ vi.mock("../src/logger.js", () => ({
   }),
 }));
 
-const { isSpaPage } = await import("../src/render.js");
+const { isSpaPage, renderWithBrowser } = await import("../src/render.js");
+
+// ── renderWithBrowser 取消测试 ────────────────────────
+
+const pw = vi.hoisted(() => ({
+  close: vi.fn(async () => {}),
+  goto: vi.fn(() => new Promise<Response>(() => {})),
+  waitForTimeout: vi.fn(async () => {}),
+  content: vi.fn(async () => "<html></html>"),
+  isConnected: vi.fn(() => true),
+}));
+
+vi.mock("playwright", () => ({
+  chromium: {
+    launch: vi.fn(async () => ({
+      isConnected: pw.isConnected,
+      newPage: vi.fn(async () => ({
+        goto: pw.goto,
+        waitForTimeout: pw.waitForTimeout,
+        content: pw.content,
+        close: pw.close,
+      })),
+    })),
+  },
+}));
+
+describe("renderWithBrowser 取消", () => {
+  it("signal 预先已中止 -> 不加载 playwright，直接返回取消", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await renderWithBrowser("https://example.com", 5000, controller.signal);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("已取消");
+    // 预先中止发生在动态 import 之前：不应启动浏览器
+    expect(pw.goto).not.toHaveBeenCalled();
+  });
+
+  it("goto 进行中 abort -> 快速返回取消且 page.close 被调用", async () => {
+    pw.goto.mockImplementationOnce(() => new Promise<Response>(() => {})); // 永不 resolve
+    const controller = new AbortController();
+
+    const pending = renderWithBrowser("https://example.com", 5000, controller.signal);
+    // 等 goto 真正开始（launch + newPage 均为 async）
+    await vi.waitFor(() => expect(pw.goto).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    const result = await pending;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("已取消");
+    expect(pw.close).toHaveBeenCalled();
+  });
+});
 
 // ── isSpaPage 测试 ────────────────────────────────────
 
