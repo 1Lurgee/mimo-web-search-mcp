@@ -6,20 +6,18 @@ import { validateUrl, redactUrl } from "./ssrf.js";
 import { htmlToMarkdown } from "./convert.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { MimoResponseSchema, type FetchParams } from "./types.js";
+import { type FetchParams } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { fetchWithTimeout, truncateMarkdown, TIMEOUT_REASON } from "./util.js";
+import { truncateMarkdown } from "./util.js";
 import { isSpaPage, renderWithBrowser, getSpaHint } from "./render.js";
 import { handleOverflow } from "./overflow.js";
-import { emit401 } from "./attribution.js";
+import { chatCompletion } from "./mimo-client.js";
 import type { ProgressReporter } from "./progress.js";
 
 // ── 模块级单例 ────────────────────────────────────────
 
 const config = loadConfig();
 const logger = createLogger(config);
-
-// ── HTTP 客户端（共用工具已迁移至 ./util.ts）──────────
 
 // ── 元数据头格式化 ─────────────────────────────────────
 
@@ -47,11 +45,11 @@ function formatMetadataHeader(
   return header;
 }
 
-// ── AI 处理（调用 MiMo API）────────────────────────────
+// ── AI 处理（通过 mimo-client.ts 统一调用）─────────────
 
 /**
  * 调用 MiMo API 对抓取的 Markdown 内容进行 AI 分析
- * 使用与 search.ts 相同的 API 模式
+ * 使用 mimo-client.ts 的统一 chatCompletion 接口
  */
 async function callMimoApi(
   markdown: string,
@@ -60,88 +58,32 @@ async function callMimoApi(
   reqId?: string,
 ): Promise<{ success: true; content: string } | { success: false; error: string }> {
   const log = reqId ? logger.withReqId(reqId) : logger;
-
-  const body = {
-    model: config.model,
-    messages: [
-      {
-        role: "system" as const,
-        content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
-      },
-      {
-        role: "user" as const,
-        content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
-      },
-    ],
-    max_completion_tokens: config.maxCompletionTokens,
-    temperature: config.temperature,
-    top_p: config.topP,
-    stream: false,
-    thinking: { type: config.thinking ? "enabled" as const : "disabled" as const },
-  };
-
-  if (log.isDebugEnabled()) {
-    log.debug("MiMo API request body:", JSON.stringify(body, null, 2));
-  }
+  log.info("调用 MiMo API 进行内容分析...");
 
   try {
-    log.info("调用 MiMo API 进行内容分析...");
-
-    const resp = await fetchWithTimeout(
-      `${config.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "api-key": config.apiKey,
-          "Content-Type": "application/json",
+    const result = await chatCompletion(
+      [
+        {
+          role: "system",
+          content: "你是一个网页内容分析助手。请根据用户的要求分析以下网页内容。",
         },
-        body: JSON.stringify(body),
-      },
-      config.requestTimeout,
-      signal,
+        {
+          role: "user",
+          content: `## 网页内容\n\n${markdown}\n\n---\n\n## 用户要求\n\n${prompt}`,
+        },
+      ],
+      { signal, reqId },
     );
 
-    log.info(`MiMo API 响应状态: ${resp.status}`);
-
-    if (!resp.ok) {
-      await resp.text().catch(() => "");
-      // 记录 401 归因事件（借鉴 grok-build 设计）
-      if (resp.status === 401) {
-        emit401("MiMoAPI", config.apiKey, { status: resp.status });
-      }
-      return { success: false, error: `MiMo API 请求失败 (HTTP ${resp.status})` };
+    if (result.success) {
+      log.info(`AI 分析完成，内容长度: ${result.content.length}`);
+      return { success: true, content: result.content };
     }
 
-    const rawData: unknown = await resp.json();
-    if (log.isDebugEnabled()) {
-      log.debug("MiMo API response:", JSON.stringify(rawData, null, 2));
-    }
-
-    const parsed = MimoResponseSchema.safeParse(rawData);
-    if (!parsed.success) {
-      log.error("MiMo API 响应校验失败:", parsed.error.message);
-      return { success: false, error: "MiMo API 返回了无效的响应格式" };
-    }
-
-    const message = parsed.data.choices?.[0]?.message;
-    if (!message?.content) {
-      return { success: false, error: "MiMo API 返回了空响应" };
-    }
-
-    log.info(`AI 分析完成，内容长度: ${message.content.length}`);
-    return { success: true, content: message.content };
+    return { success: false, error: result.error };
   } catch (err) {
+    // chatCompletion 重新抛出的网络错误（ECONNRESET、ECONNREFUSED 等）
     const error = err instanceof Error ? err : new Error(String(err));
-
-    if (error.name === "AbortError") {
-      const cause = "cause" in error ? (error as { cause: unknown }).cause : undefined;
-      const isTimeout = cause === TIMEOUT_REASON;
-      return {
-        success: false,
-        error: isTimeout ? "MiMo API 请求超时" : "请求被取消",
-      };
-    }
-
     return { success: false, error: `MiMo API 请求异常: ${error.message}` };
   }
 }

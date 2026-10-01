@@ -104,13 +104,20 @@ export function truncateMarkdown(text: string, maxLength: number): string {
   // 无合适边界，硬截断
   const base = cutPoint >= 0 ? truncated.substring(0, cutPoint).trimEnd() : truncated;
 
-  // 修复截断可能破坏的 Markdown 链接：移除末尾不完整的 [text 片段
-  // 始终检查末尾是否有未闭合的 [（即使文本中包含其他完整链接）
+  // 修复截断可能破坏的 Markdown 链接
+  // 情况 1：末尾未闭合的 [（如 "[text" 被切断）→ 移除该 [ 及其后的内容
   const lastOpen = base.lastIndexOf("[");
   const lastClose = base.lastIndexOf("]");
   if (lastOpen > lastClose) {
-    // 最后一个 [ 没有对应的 ]，说明被截断了，移除该 [ 及其后的内容
     return base.substring(0, lastOpen).trimEnd() + truncationNotice;
+  }
+
+  // 情况 2：]( 之后的 URL 的 ")" 被截断（如 "](https://…/pa"）→ 移除整个残缺链接
+  // 注意："](" 必然是 Markdown 链接语法，括号后的普通散文不会误伤
+  const linkMark = base.lastIndexOf("](");
+  if (linkMark !== -1 && base.indexOf(")", linkMark + 1) === -1) {
+    // linkMark 是 "]"，其对应的 "[" 在 linkMark - 1
+    return base.substring(0, linkMark - 1).trimEnd() + truncationNotice;
   }
 
   return base + truncationNotice;

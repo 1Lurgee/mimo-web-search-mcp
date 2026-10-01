@@ -121,7 +121,7 @@ Claude: [自动调用 mimo_web_fetch 抓取网页内容]
 | 变量                    | 说明                                        | 默认值                           |
 | ----------------------- | ------------------------------------------- | -------------------------------- |
 | `MIMO_BASE_URL`         | API 基础 URL                                | `https://api.xiaomimimo.com/v1` |
-| `MIMO_MODEL`            | 模型名称（如 `mimo-v2.5`、`mimo-v2.5-pro`） | `mimo-v2.5`                      |
+| `MIMO_MODEL`            | 模型名称（如 `mimo-v2.6-flash`、`mimo-v2.5-pro`） | `mimo-v2.6-flash`           |
 | `MIMO_THINKING`         | 启用思考模式                                | `false`                          |
 | `MIMO_AUTO_SUMMARY`     | 超长内容自动摘要                            | `true`                           |
 | `MIMO_ENABLE_BROWSER`   | 启用浏览器渲染（SPA 降级）                  | `false`                          |

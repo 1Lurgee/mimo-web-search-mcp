@@ -149,7 +149,7 @@ export function loadConfig(): Readonly<AppConfig> {
   _cachedConfig = Object.freeze({
     apiKey,
     baseUrl,
-    model: process.env.MIMO_MODEL || "mimo-v2.5",
+    model: process.env.MIMO_MODEL || "mimo-v2.6-flash",
     requestTimeout: parseIntEnv(process.env.REQUEST_TIMEOUT, 60000, 1000, 300000),      // 1秒 ~ 5分钟
     maxCompletionTokens: parseIntEnv(process.env.MAX_COMPLETION_TOKENS, 1024, 1, 100000),
     temperature: parseFloatEnv(process.env.TEMPERATURE, 0.3, 0, 1.5),
